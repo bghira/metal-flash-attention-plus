@@ -325,4 +325,150 @@ final class QuantizedAttentionTest: XCTestCase {
     XCTAssertLessThan(Float(int8Size), Float(fp32Size) * 0.3)  // Less than 30% of FP32
     XCTAssertLessThan(Float(int4Size), Float(fp32Size) * 0.15)  // Less than 15% of FP32
   }
+
+  func testQuantizedBackwardPass() {
+    // Test dimensions
+    let batchSize = 1
+    let sequenceLength = 32
+    let headDim = 16
+    let totalElements = batchSize * sequenceLength * headDim
+
+    // Create test data
+    let queryData = (0..<totalElements).map { _ in Float.random(in: -1...1) }
+    let keyData = (0..<totalElements).map { _ in Float.random(in: -1...1) }
+    let valueData = (0..<totalElements).map { _ in Float.random(in: -1...1) }
+    let gradOutputData = (0..<totalElements).map { _ in Float.random(in: -0.1...0.1) }
+    let logsumexpData = (0..<sequenceLength).map { _ in Float.random(in: -5...5) }
+
+    let shape = [batchSize, sequenceLength, headDim]
+
+    // Create quantized configuration
+    var config = QuantizedAttention.Configuration()
+    config.queryPrecision = .INT8
+    config.keyPrecision = .INT8
+    config.valuePrecision = .INT8
+
+    // Create quantized tensors
+    let tensors = quantizedAttention.createQuantizedTensors(
+      queryData: queryData,
+      keyData: keyData,
+      valueData: valueData,
+      queryShape: shape,
+      keyShape: shape,
+      valueShape: shape,
+      config: config
+    )
+
+    // Create buffers for gradients and intermediate values
+    guard let gradOutputBuffer = device.makeBuffer(
+      bytes: gradOutputData,
+      length: totalElements * MemoryLayout<Float>.size,
+      options: .storageModeShared),
+      let logsumexpBuffer = device.makeBuffer(
+      bytes: logsumexpData,
+      length: sequenceLength * MemoryLayout<Float>.size,
+      options: .storageModeShared),
+      let gradQueryBuffer = device.makeBuffer(
+      length: totalElements * MemoryLayout<Float>.size,
+      options: .storageModeShared),
+      let gradKeyBuffer = device.makeBuffer(
+      length: totalElements * MemoryLayout<Float>.size,
+      options: .storageModeShared),
+      let gradValueBuffer = device.makeBuffer(
+      length: totalElements * MemoryLayout<Float>.size,
+      options: .storageModeShared),
+      let dValuesBuffer = device.makeBuffer(
+      length: sequenceLength * MemoryLayout<Float>.size,
+      options: .storageModeShared) else {
+      XCTFail("Failed to create buffers")
+      return
+    }
+
+    // Create attention descriptor
+    var baseDescriptor = AttentionDescriptor()
+    baseDescriptor.matrixDimensions = (
+      row: UInt32(sequenceLength),
+      column: UInt32(sequenceLength),
+      head: UInt16(headDim)
+    )
+    baseDescriptor.transposeState = (Q: false, K: false, V: false, O: false)
+
+    let descriptor = QuantizedAttention.QuantizedAttentionDescriptor(
+      baseDescriptor: baseDescriptor,
+      quantizationConfig: config
+    )
+
+    // Test backward query pass
+    guard let queryCommandBuffer = quantizedAttention.backwardQuery(
+      query: tensors.query,
+      key: tensors.key,
+      value: tensors.value,
+      gradOutput: gradOutputBuffer,
+      logsumexp: logsumexpBuffer,
+      gradQuery: gradQueryBuffer,
+      dValues: dValuesBuffer,
+      descriptor: descriptor
+    ) else {
+      XCTFail("Failed to create backward query command buffer")
+      return
+    }
+
+    queryCommandBuffer.commit()
+    queryCommandBuffer.waitUntilCompleted()
+
+    XCTAssertNil(queryCommandBuffer.error, "Backward query pass failed: \(queryCommandBuffer.error?.localizedDescription ?? "")")
+
+    // Test backward key-value pass
+    guard let kvCommandBuffer = quantizedAttention.backwardKeyValue(
+      query: tensors.query,
+      key: tensors.key,
+      value: tensors.value,
+      gradOutput: gradOutputBuffer,
+      logsumexp: logsumexpBuffer,
+      dValues: dValuesBuffer,
+      gradKey: gradKeyBuffer,
+      gradValue: gradValueBuffer,
+      descriptor: descriptor
+    ) else {
+      XCTFail("Failed to create backward key-value command buffer")
+      return
+    }
+
+    kvCommandBuffer.commit()
+    kvCommandBuffer.waitUntilCompleted()
+
+    XCTAssertNil(kvCommandBuffer.error, "Backward key-value pass failed: \(kvCommandBuffer.error?.localizedDescription ?? "")")
+
+    // Verify gradients are not all zeros
+    let gradQueryPtr = gradQueryBuffer.contents().bindMemory(to: Float.self, capacity: totalElements)
+    let gradKeyPtr = gradKeyBuffer.contents().bindMemory(to: Float.self, capacity: totalElements)
+    let gradValuePtr = gradValueBuffer.contents().bindMemory(to: Float.self, capacity: totalElements)
+
+    var queryGradNorm: Float = 0
+    var keyGradNorm: Float = 0
+    var valueGradNorm: Float = 0
+
+    for i in 0..<totalElements {
+      queryGradNorm += gradQueryPtr[i] * gradQueryPtr[i]
+      keyGradNorm += gradKeyPtr[i] * gradKeyPtr[i]
+      valueGradNorm += gradValuePtr[i] * gradValuePtr[i]
+    }
+
+    queryGradNorm = sqrt(queryGradNorm)
+    keyGradNorm = sqrt(keyGradNorm)
+    valueGradNorm = sqrt(valueGradNorm)
+
+    print("Quantized backward pass results:")
+    print("  Query gradient norm: \(queryGradNorm)")
+    print("  Key gradient norm: \(keyGradNorm)")
+    print("  Value gradient norm: \(valueGradNorm)")
+
+    // Check gradients are reasonable (not zero, not too large)
+    XCTAssertGreaterThan(queryGradNorm, 0.001, "Query gradients appear to be zero")
+    XCTAssertLessThan(queryGradNorm, 1000.0, "Query gradients appear too large")
+    XCTAssertGreaterThan(keyGradNorm, 0.001, "Key gradients appear to be zero")
+    XCTAssertLessThan(keyGradNorm, 1000.0, "Key gradients appear too large")
+    XCTAssertGreaterThan(valueGradNorm, 0.001, "Value gradients appear to be zero")
+    XCTAssertLessThan(valueGradNorm, 1000.0, "Value gradients appear too large")
+  }
 }
