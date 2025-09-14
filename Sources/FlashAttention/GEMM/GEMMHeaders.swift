@@ -618,6 +618,154 @@ func createMetalSimdgroupMatrixStorage() -> String {
     }
   }
 
+  // Add quantized load methods
+  output += """
+        // Quantized INT8 load method - device memory
+        METAL_FUNC void load_quantized_int8(const device char *src, uint elements_per_row, ushort2 matrix_origin, bool transpose_matrix = false) {
+          static_assert(is_same_v<T, float>, "Quantized load only supported for float register precision");
+
+          // Note: This is a simplified version that assumes scale=1.0 and zero_point=0 for now
+          // Real quantization parameters should be passed through kernel uniforms
+          float scale = 1.0f;
+          int32_t zero_point = 0;
+
+          // Calculate address manually for int8_t data
+          const device char *adjusted_src;
+          if (transpose_matrix) {
+            adjusted_src = src + ulong(matrix_origin.x * elements_per_row) + matrix_origin.y;
+          } else {
+            adjusted_src = src + ulong(matrix_origin.y * elements_per_row) + matrix_origin.x;
+          }
+
+          if (!transpose_matrix) {
+            if (elements_per_row % 2 == 0) {
+              vec<int8_t, 2> quantized_data = *reinterpret_cast<const device vec<int8_t, 2>*>(adjusted_src);
+              vec<T, 2> dequantized_data;
+              dequantized_data.x = (float(quantized_data.x) - float(zero_point)) * scale;
+              dequantized_data.y = (float(quantized_data.y) - float(zero_point)) * scale;
+              *(thread_elements()) = dequantized_data;
+            } else {
+              T val1 = (float(adjusted_src[0]) - float(zero_point)) * scale;
+              T val2 = (elements_per_row > 1) ? (float(adjusted_src[1]) - float(zero_point)) * scale : T(0);
+              *(thread_elements()) = vec<T, 2>(val1, val2);
+            }
+          } else {
+            T val1 = (float(adjusted_src[0]) - float(zero_point)) * scale;
+            T val2 = (elements_per_row > 1) ? (float(adjusted_src[elements_per_row]) - float(zero_point)) * scale : T(0);
+            *(thread_elements()) = vec<T, 2>(val1, val2);
+          }
+        }
+
+        // Quantized INT8 load method - threadgroup memory
+        METAL_FUNC void load_quantized_int8(const threadgroup char *src, ushort elements_per_row, ushort2 matrix_origin, bool transpose_matrix = false) {
+          static_assert(is_same_v<T, float>, "Quantized load only supported for float register precision");
+
+          // Note: This is a simplified version that assumes scale=1.0 and zero_point=0 for now
+          // Real quantization parameters should be passed through kernel uniforms
+          float scale = 1.0f;
+          int32_t zero_point = 0;
+
+          // Calculate address manually for int8_t data
+          const threadgroup char *adjusted_src;
+          if (transpose_matrix) {
+            adjusted_src = src + matrix_origin.x * elements_per_row + matrix_origin.y;
+          } else {
+            adjusted_src = src + matrix_origin.y * elements_per_row + matrix_origin.x;
+          }
+
+          if (!transpose_matrix) {
+            if (elements_per_row % 2 == 0) {
+              vec<int8_t, 2> quantized_data = *reinterpret_cast<const threadgroup vec<int8_t, 2>*>(adjusted_src);
+              vec<T, 2> dequantized_data;
+              dequantized_data.x = (float(quantized_data.x) - float(zero_point)) * scale;
+              dequantized_data.y = (float(quantized_data.y) - float(zero_point)) * scale;
+              *(thread_elements()) = dequantized_data;
+            } else {
+              T val1 = (float(adjusted_src[0]) - float(zero_point)) * scale;
+              T val2 = (elements_per_row > 1) ? (float(adjusted_src[1]) - float(zero_point)) * scale : T(0);
+              *(thread_elements()) = vec<T, 2>(val1, val2);
+            }
+          } else {
+            T val1 = (float(adjusted_src[0]) - float(zero_point)) * scale;
+            T val2 = (elements_per_row > 1) ? (float(adjusted_src[elements_per_row]) - float(zero_point)) * scale : T(0);
+            *(thread_elements()) = vec<T, 2>(val1, val2);
+          }
+        }
+
+        // Quantized INT4 load method - device memory
+        METAL_FUNC void load_quantized_int4(const device uchar *src, uint elements_per_row, ushort2 matrix_origin, bool transpose_matrix = false) {
+          static_assert(is_same_v<T, float>, "Quantized load only supported for float register precision");
+
+          // Note: This is a simplified version that assumes scale=1.0 and zero_point=0 for now
+          // Real quantization parameters should be passed through kernel uniforms
+          float scale = 1.0f;
+          int32_t zero_point = 0;
+
+          // For INT4, elements are packed 2 per byte
+          uint packed_elements_per_row = (elements_per_row + 1) / 2;
+
+          // Calculate address manually for packed INT4 data
+          const device uchar *adjusted_src;
+          if (transpose_matrix) {
+            adjusted_src = src + ulong((matrix_origin.x / 2) * packed_elements_per_row) + (matrix_origin.y / 2);
+          } else {
+            adjusted_src = src + ulong((matrix_origin.y / 2) * packed_elements_per_row) + (matrix_origin.x / 2);
+          }
+
+          uint8_t packed = adjusted_src[0];
+          int32_t val1, val2;
+
+          if (matrix_origin.x % 2 == 0) {
+            val1 = int32_t(packed & 0xF) - 8;  // Lower nibble, convert from [0,15] to [-8,7]
+            val2 = int32_t(packed >> 4) - 8;   // Upper nibble
+          } else {
+            val1 = int32_t(packed >> 4) - 8;   // Upper nibble
+            val2 = (matrix_origin.x + 1 < elements_per_row) ? int32_t(packed & 0xF) - 8 : 0;
+          }
+
+          T dequant_val1 = (float(val1) - float(zero_point)) * scale;
+          T dequant_val2 = (float(val2) - float(zero_point)) * scale;
+          *(thread_elements()) = vec<T, 2>(dequant_val1, dequant_val2);
+        }
+
+        // Quantized INT4 load method - threadgroup memory
+        METAL_FUNC void load_quantized_int4(const threadgroup uchar *src, ushort elements_per_row, ushort2 matrix_origin, bool transpose_matrix = false) {
+          static_assert(is_same_v<T, float>, "Quantized load only supported for float register precision");
+
+          // Note: This is a simplified version that assumes scale=1.0 and zero_point=0 for now
+          // Real quantization parameters should be passed through kernel uniforms
+          float scale = 1.0f;
+          int32_t zero_point = 0;
+
+          // For INT4, elements are packed 2 per byte
+          ushort packed_elements_per_row = (elements_per_row + 1) / 2;
+
+          // Calculate address manually for packed INT4 data
+          const threadgroup uchar *adjusted_src;
+          if (transpose_matrix) {
+            adjusted_src = src + (matrix_origin.x / 2) * packed_elements_per_row + (matrix_origin.y / 2);
+          } else {
+            adjusted_src = src + (matrix_origin.y / 2) * packed_elements_per_row + (matrix_origin.x / 2);
+          }
+
+          uint8_t packed = adjusted_src[0];
+          int32_t val1, val2;
+
+          if (matrix_origin.x % 2 == 0) {
+            val1 = int32_t(packed & 0xF) - 8;  // Lower nibble, convert from [0,15] to [-8,7]
+            val2 = int32_t(packed >> 4) - 8;   // Upper nibble
+          } else {
+            val1 = int32_t(packed >> 4) - 8;   // Upper nibble
+            val2 = (matrix_origin.x + 1 < elements_per_row) ? int32_t(packed & 0xF) - 8 : 0;
+          }
+
+          T dequant_val1 = (float(val1) - float(zero_point)) * scale;
+          T dequant_val2 = (float(val2) - float(zero_point)) * scale;
+          *(thread_elements()) = vec<T, 2>(dequant_val1, dequant_val2);
+        }
+
+    """
+
   // Add the last section of the header.
   output += """
         template <typename U, typename V>

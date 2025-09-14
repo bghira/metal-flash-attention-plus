@@ -273,6 +273,8 @@ extension GEMMKernelDescriptor {
       case .FP32: return true
       case .FP16: return false
       case .BF16: return false
+      case .INT8: return false  // Quantized types use less memory
+      case .INT4: return false  // Quantized types use less memory
       }
     }
     var useLargeAllocation = false

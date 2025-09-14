@@ -204,6 +204,19 @@ private func runCorrectnessTest(descriptor: GEMMDescriptor) {
           let sourceValue16 = castedPointer[Int(address)]
           let sourceValue16x2 = SIMD2<UInt16>(.zero, sourceValue16)
           sourceValue = unsafeBitCast(sourceValue16x2, to: Float.self)
+        case .INT8:
+          let castedPointer =
+            sourcePointer
+            .assumingMemoryBound(to: Int8.self)
+          sourceValue = Float(castedPointer[Int(address)])
+        case .INT4:
+          let castedPointer =
+            sourcePointer
+            .assumingMemoryBound(to: UInt8.self)
+          let packedByte = castedPointer[Int(address) / 2]
+          let isLowNibble = Int(address) % 2 == 0
+          let nibble = isLowNibble ? (packedByte & 0xF) : (packedByte >> 4)
+          sourceValue = Float(Int32(nibble) - 8)
         }
         gpuOperandC[Int(address)] = sourceValue
       }

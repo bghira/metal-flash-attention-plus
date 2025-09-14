@@ -12,6 +12,8 @@ extension GEMMKernel {
     var leadingDimensionB: String?
     var loadFunctionA: String?
     var loadFunctionB: String?
+    var isQuantizedA: Bool = false
+    var isQuantizedB: Bool = false
   }
 
   func createMultiply(descriptor: MultiplyDescriptor) -> String {
@@ -86,11 +88,23 @@ extension GEMMKernel {
       var multiplyDesc = MultiplyDescriptor()
       if memoryPrecisions.A == .BF16, registerPrecisions.A == .FP32 {
         multiplyDesc.loadFunctionA = "load_bfloat"
+      } else if memoryPrecisions.A == .INT8 {
+        multiplyDesc.loadFunctionA = "load_quantized_int8"
+        multiplyDesc.isQuantizedA = true
+      } else if memoryPrecisions.A == .INT4 {
+        multiplyDesc.loadFunctionA = "load_quantized_int4"
+        multiplyDesc.isQuantizedA = true
       } else {
         multiplyDesc.loadFunctionA = "load"
       }
       if memoryPrecisions.B == .BF16, registerPrecisions.B == .FP32 {
         multiplyDesc.loadFunctionB = "load_bfloat"
+      } else if memoryPrecisions.B == .INT8 {
+        multiplyDesc.loadFunctionB = "load_quantized_int8"
+        multiplyDesc.isQuantizedB = true
+      } else if memoryPrecisions.B == .INT4 {
+        multiplyDesc.loadFunctionB = "load_quantized_int4"
+        multiplyDesc.isQuantizedB = true
       } else {
         multiplyDesc.loadFunctionB = "load"
       }

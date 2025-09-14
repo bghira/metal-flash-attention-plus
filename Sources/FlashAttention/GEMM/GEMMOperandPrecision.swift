@@ -7,33 +7,24 @@
 
 /// An enumeration of the precisions supported by the kernel.
 ///
-/// If you wish to support quantized precisions, copy/translate the source code
-/// and integrate a modified version into your app. Something similar to a Swift
-/// `enum` (e.g. C++ `enum class`) could enumerate the quantization formats
-/// used by application code. An exemplary set could be:
-/// - FP32
-/// - FP16
-/// - BF16
-/// - signed 8-bit integer
-/// - s1ezm7
-/// - FP8
-/// - palletized
+/// This implementation supports quantized precisions optimized for Apple GPU
+/// matrix acceleration. The quantized formats follow
+/// these design principles:
+/// - Keep data compressed in `device` or `threadgroup` memory
+/// - Transform to floating point when loading into registers
+/// - Keep accumulator in floating point until output needs to be written
+/// - Compress when writing back to device memory
 ///
-/// If you support non-floating-point formats, you have the responsibility of
-/// authoring correct and performant GPU code for them. A general rule of thumb,
-/// is keep the data compressed in `device` or `threadgroup` memory. Transform
-/// into a floating point type while loading into the registers. Keep the
-/// accumulator in floating point until the output needs to be written.
-/// If the output is quantized, it will be compressed when writing back to
-/// `device` memory (or `threadgroup` before the async copy in edge cases).
-///
-/// For example, the reference implementation treats BF16 like a quantized
-/// integer type on Apple7 and Apple8 GPUs. It is decompressed to FP32 in
-/// registers.
+/// GPU-accelerated quantization formats:
+/// - INT8: 8-bit signed integers with 16-bit or 32-bit accumulation
+/// - INT4: 4-bit integers using optimized GPU instructions (16 levels)
+/// - Scaling factors and zero points stored separately for dequantization
 public enum GEMMOperandPrecision: UInt16 {
   case FP32 = 0
   case FP16 = 1
   case BF16 = 2
+  case INT8 = 3
+  case INT4 = 4
 
   // The MSL keyword corresponding to the precision.
   public var name: String {
@@ -44,6 +35,10 @@ public enum GEMMOperandPrecision: UInt16 {
       return "half"
     case .BF16:
       return "bfloat"
+    case .INT8:
+      return "char"
+    case .INT4:
+      return "uchar"  // Stored as packed 4-bit values in 8-bit containers
     }
   }
 
@@ -56,6 +51,32 @@ public enum GEMMOperandPrecision: UInt16 {
       return 2
     case .BF16:
       return 2
+    case .INT8:
+      return 1
+    case .INT4:
+      return 1  // Two 4-bit values packed into one byte
+    }
+  }
+
+  /// Whether this precision requires quantization parameters (scale and zero point)
+  public var requiresQuantizationParameters: Bool {
+    switch self {
+    case .FP32, .FP16, .BF16:
+      return false
+    case .INT8, .INT4:
+      return true
+    }
+  }
+
+  /// The accumulator precision to use for this operand precision
+  public var accumulatorPrecision: GEMMOperandPrecision {
+    switch self {
+    case .FP32, .FP16, .BF16:
+      return .FP32
+    case .INT8:
+      return .FP32  // Use FP32 accumulator for INT8 operations
+    case .INT4:
+      return .FP32  // Use FP32 accumulator for INT4 operations
     }
   }
 }

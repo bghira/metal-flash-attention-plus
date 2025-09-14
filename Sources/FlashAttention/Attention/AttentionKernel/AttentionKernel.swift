@@ -109,6 +109,16 @@ extension AttentionKernel {
       fatalError("Invalid precisions.")
     case (.FP32, .FP32):
       return "load"
+
+    case (.INT8, .FP32):
+      return "load_quantized_int8"
+    case (.INT4, .FP32):
+      return "load_quantized_int4"
+
+    case (.INT8, _), (.INT4, _):
+      fatalError("Quantized inputs must use FP32 register precision.")
+    case (_, .INT8), (_, .INT4):
+      fatalError("Register precision cannot be quantized.")
     }
   }
 
@@ -140,6 +150,16 @@ extension AttentionKernel {
       fatalError("Invalid precisions.")
     case (.FP32, .FP32):
       return "store"
+
+    case (.INT8, .FP32):
+      return "store_quantized_int8"
+    case (.INT4, .FP32):
+      return "store_quantized_int4"
+
+    case (.INT8, _), (.INT4, _):
+      fatalError("Quantized outputs must use FP32 register precision.")
+    case (_, .INT8), (_, .INT4):
+      fatalError("Register precision cannot be quantized.")
     }
   }
 
