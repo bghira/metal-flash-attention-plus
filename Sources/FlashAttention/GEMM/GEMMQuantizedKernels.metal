@@ -91,7 +91,7 @@ namespace quantized_ops {
                 for (ushort j = 0; j < TILE_K && (k + j) < K; j += 4) {
                     uint idx = (row + i) * A_stride + (k + j);
 
-                    // Using char4 load instead of uint4 + type casting gives 200% speedup.
+                    // Optimized vectorized load for better GPU performance.
                     char4 int8_vals = *reinterpret_cast<const device char4*>(&A[idx]);
 
                     // Vectorized dequantization
@@ -110,7 +110,7 @@ namespace quantized_ops {
                 for (ushort j = 0; j < TILE_N && (col + j) < N; j += 4) {
                     uint idx = (k + i) * B_stride + (col + j);
 
-                    // Using char4 load instead of uint4 + type casting gives 200% speedup.
+                    // Optimized vectorized load for better GPU performance.
                     char4 int8_vals = *reinterpret_cast<const device char4*>(&B[idx]);
 
                     // Vectorized dequantization
