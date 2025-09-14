@@ -14,6 +14,10 @@ extension GEMMKernel {
     var loadFunctionB: String?
     var isQuantizedA: Bool = false
     var isQuantizedB: Bool = false
+    var quantizedScaleA: String?
+    var quantizedZeroPointA: String?
+    var quantizedScaleB: String?
+    var quantizedZeroPointB: String?
   }
 
   func createMultiply(descriptor: MultiplyDescriptor) -> String {
@@ -41,13 +45,13 @@ extension GEMMKernel {
       for (ushort m = 0; m < \(registerM); m += 8) {
         ushort2 origin(0, m);
         auto A = get_sram(A_sram, 8, origin);
-        A->\(loadFunctionA)(A_src, \(leadingDimensionA), ushort2(k, m), A_trans);
+        \(descriptor.isQuantizedA ? "A->\(loadFunctionA)(A_src, \(leadingDimensionA), ushort2(k, m), \(descriptor.quantizedScaleA ?? "1.0f"), \(descriptor.quantizedZeroPointA ?? "0"), A_trans);" : "A->\(loadFunctionA)(A_src, \(leadingDimensionA), ushort2(k, m), A_trans);")
       }
       #pragma clang loop unroll(full)
       for (ushort n = 0; n < \(registerN); n += 8) {
         ushort2 origin(n, 0);
         auto B = get_sram(B_sram, \(registerN), origin);
-        B->\(loadFunctionB)(B_src, \(leadingDimensionB), ushort2(n, k), B_trans);
+        \(descriptor.isQuantizedB ? "B->\(loadFunctionB)(B_src, \(leadingDimensionB), ushort2(n, k), \(descriptor.quantizedScaleB ?? "1.0f"), \(descriptor.quantizedZeroPointB ?? "0"), B_trans);" : "B->\(loadFunctionB)(B_src, \(leadingDimensionB), ushort2(n, k), B_trans);")
       }
       #pragma clang loop unroll(full)
       for (ushort m = 0; m < \(registerM); m += 8) {
@@ -91,9 +95,13 @@ extension GEMMKernel {
       } else if memoryPrecisions.A == .INT8 {
         multiplyDesc.loadFunctionA = "load_quantized_int8"
         multiplyDesc.isQuantizedA = true
+        multiplyDesc.quantizedScaleA = "quantization_scale_A"
+        multiplyDesc.quantizedZeroPointA = "quantization_zero_point_A"
       } else if memoryPrecisions.A == .INT4 {
         multiplyDesc.loadFunctionA = "load_quantized_int4"
         multiplyDesc.isQuantizedA = true
+        multiplyDesc.quantizedScaleA = "quantization_scale_A"
+        multiplyDesc.quantizedZeroPointA = "quantization_zero_point_A"
       } else {
         multiplyDesc.loadFunctionA = "load"
       }
@@ -102,9 +110,13 @@ extension GEMMKernel {
       } else if memoryPrecisions.B == .INT8 {
         multiplyDesc.loadFunctionB = "load_quantized_int8"
         multiplyDesc.isQuantizedB = true
+        multiplyDesc.quantizedScaleB = "quantization_scale_B"
+        multiplyDesc.quantizedZeroPointB = "quantization_zero_point_B"
       } else if memoryPrecisions.B == .INT4 {
         multiplyDesc.loadFunctionB = "load_quantized_int4"
         multiplyDesc.isQuantizedB = true
+        multiplyDesc.quantizedScaleB = "quantization_scale_B"
+        multiplyDesc.quantizedZeroPointB = "quantization_zero_point_B"
       } else {
         multiplyDesc.loadFunctionB = "load"
       }

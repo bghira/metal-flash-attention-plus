@@ -621,13 +621,8 @@ func createMetalSimdgroupMatrixStorage() -> String {
   // Add quantized load methods
   output += """
         // Quantized INT8 load method - device memory
-        METAL_FUNC void load_quantized_int8(const device char *src, uint elements_per_row, ushort2 matrix_origin, bool transpose_matrix = false) {
+        METAL_FUNC void load_quantized_int8(const device char *src, uint elements_per_row, ushort2 matrix_origin, float scale, int32_t zero_point, bool transpose_matrix = false) {
           static_assert(is_same_v<T, float>, "Quantized load only supported for float register precision");
-
-          // Note: This is a simplified version that assumes scale=1.0 and zero_point=0 for now
-          // Real quantization parameters should be passed through kernel uniforms
-          float scale = 1.0f;
-          int32_t zero_point = 0;
 
           // Calculate address manually for int8_t data
           const device char *adjusted_src;
@@ -657,13 +652,8 @@ func createMetalSimdgroupMatrixStorage() -> String {
         }
 
         // Quantized INT8 load method - threadgroup memory
-        METAL_FUNC void load_quantized_int8(const threadgroup char *src, ushort elements_per_row, ushort2 matrix_origin, bool transpose_matrix = false) {
+        METAL_FUNC void load_quantized_int8(const threadgroup char *src, ushort elements_per_row, ushort2 matrix_origin, float scale, int32_t zero_point, bool transpose_matrix = false) {
           static_assert(is_same_v<T, float>, "Quantized load only supported for float register precision");
-
-          // Note: This is a simplified version that assumes scale=1.0 and zero_point=0 for now
-          // Real quantization parameters should be passed through kernel uniforms
-          float scale = 1.0f;
-          int32_t zero_point = 0;
 
           // Calculate address manually for int8_t data
           const threadgroup char *adjusted_src;
@@ -693,13 +683,8 @@ func createMetalSimdgroupMatrixStorage() -> String {
         }
 
         // Quantized INT4 load method - device memory
-        METAL_FUNC void load_quantized_int4(const device uchar *src, uint elements_per_row, ushort2 matrix_origin, bool transpose_matrix = false) {
+        METAL_FUNC void load_quantized_int4(const device uchar *src, uint elements_per_row, ushort2 matrix_origin, float scale, int32_t zero_point, bool transpose_matrix = false) {
           static_assert(is_same_v<T, float>, "Quantized load only supported for float register precision");
-
-          // Note: This is a simplified version that assumes scale=1.0 and zero_point=0 for now
-          // Real quantization parameters should be passed through kernel uniforms
-          float scale = 1.0f;
-          int32_t zero_point = 0;
 
           // For INT4, elements are packed 2 per byte
           uint packed_elements_per_row = (elements_per_row + 1) / 2;
@@ -729,13 +714,8 @@ func createMetalSimdgroupMatrixStorage() -> String {
         }
 
         // Quantized INT4 load method - threadgroup memory
-        METAL_FUNC void load_quantized_int4(const threadgroup uchar *src, ushort elements_per_row, ushort2 matrix_origin, bool transpose_matrix = false) {
+        METAL_FUNC void load_quantized_int4(const threadgroup uchar *src, ushort elements_per_row, ushort2 matrix_origin, float scale, int32_t zero_point, bool transpose_matrix = false) {
           static_assert(is_same_v<T, float>, "Quantized load only supported for float register precision");
-
-          // Note: This is a simplified version that assumes scale=1.0 and zero_point=0 for now
-          // Real quantization parameters should be passed through kernel uniforms
-          float scale = 1.0f;
-          int32_t zero_point = 0;
 
           // For INT4, elements are packed 2 per byte
           ushort packed_elements_per_row = (elements_per_row + 1) / 2;
