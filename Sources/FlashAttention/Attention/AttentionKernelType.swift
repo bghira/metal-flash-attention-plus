@@ -10,12 +10,12 @@
 public enum AttentionKernelType {
   /// Forward attention, computing O and L.
   case forward
-  
+
   /// Backward attention, computing D and dQ.
   ///
   /// Depends on L.
   case backwardQuery
-  
+
   /// Backward attention, computing dK and dV.
   ///
   /// Depends on L and D.

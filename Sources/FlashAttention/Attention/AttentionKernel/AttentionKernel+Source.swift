@@ -19,39 +19,39 @@ extension AttentionKernel {
         return loopBackwardKeyValue()
       }
     }
-    
+
     return """
-    
-    \(createMetalSimdgroupEvent())
-    \(createMetalSimdgroupMatrixStorage())
-    using namespace metal;
-    
-    \(createConstants())
-    
-    // Declare the function.
-    kernel void attention(
-      \(createBufferBindings())
-      threadgroup uchar *threadgroup_block [[threadgroup(0)]],
-      
-      uint gid [[threadgroup_position_in_grid]],
-      ushort sidx [[simdgroup_index_in_threadgroup]],
-      ushort lane_id [[thread_index_in_simdgroup]]
-    ) {
-      ushort2 morton_offset = morton_order(lane_id);
-      uint parallelization_group_offset = gid;
-      parallelization_group_offset *= \(blockDimensions.parallelization);
-      
-      // Return early if the entire SIMD is out of bounds.
-      if (\(parallelizationGroupOffset) >= \(parallelizationDimension)) {
-        return;
+
+      \(createMetalSimdgroupEvent())
+      \(createMetalSimdgroupMatrixStorage())
+      using namespace metal;
+
+      \(createConstants())
+
+      // Declare the function.
+      kernel void attention(
+        \(createBufferBindings())
+        threadgroup uchar *threadgroup_block [[threadgroup(0)]],
+        
+        uint gid [[threadgroup_position_in_grid]],
+        ushort sidx [[simdgroup_index_in_threadgroup]],
+        ushort lane_id [[thread_index_in_simdgroup]]
+      ) {
+        ushort2 morton_offset = morton_order(lane_id);
+        uint parallelization_group_offset = gid;
+        parallelization_group_offset *= \(blockDimensions.parallelization);
+        
+        // Return early if the entire SIMD is out of bounds.
+        if (\(parallelizationGroupOffset) >= \(parallelizationDimension)) {
+          return;
+        }
+        
+        \(createSetup())
+        \(createLoop())
+        \(createCleanup(type: type))
       }
-      
-      \(createSetup())
-      \(createLoop())
-      \(createCleanup(type: type))
-    }
-    
-    """
+
+      """
   }
 }
 
@@ -60,15 +60,20 @@ extension AttentionKernel {
 extension AttentionKernel {
   func createConstants() -> String {
     """
-    
+
     // R = row dimension (output sequence)
     // C = column dimension (input sequence)
     constant uint R [[function_constant(0)]];
     constant uint C [[function_constant(1)]];
-    
+
+    // Sparsity pattern constants
+    constant bool HAS_SLIDING_WINDOW [[function_constant(2)]];
+    constant uint WINDOW_SIZE [[function_constant(3)]];
+    constant bool IS_CAUSAL [[function_constant(4)]];
+
     """
   }
-  
+
   func createBufferBindings() -> String {
     // What operands does the kernel use?
     var operands: [AttentionOperand] = []
@@ -92,7 +97,7 @@ extension AttentionKernel {
     operands.sort {
       $0.bufferBinding! < $1.bufferBinding!
     }
-    
+
     var output: String = ""
     for operand in operands {
       var line = "device \(memoryName(operand))* \(operand) "
@@ -161,7 +166,7 @@ extension AttentionKernel {
     outerProductDesc.B = .K
     outerProductDesc.C = .S
     let QKT = outerProduct(descriptor: outerProductDesc)
-    
+
     var accumulateDesc = AttentionAccumulateDescriptor()
     accumulateDesc.A = .P
     accumulateDesc.B = .V
@@ -169,129 +174,129 @@ extension AttentionKernel {
     accumulateDesc.everyIterationScale = "correction"
     accumulateDesc.lastIterationScale = "fast::divide(1, l)"
     let PV = accumulate(descriptor: accumulateDesc)
-    
+
     return """
-    
-    // Outer loop over the traversal dimension.
-    for (uint c = 0; c < C; c += \(blockDimensions.traversal)) {
-      // S = Q * K^T
-      \(QKT)
-      \(maskAttentionMatrix())
-      \(maskAttentionMatrixEdge())
-      
-      // m = reduce(m)
-      \(onlineReduceMaximum())
-      
-      // correction = exp(m_old) / exp(m_new)
-      \(onlineCorrectO())
-      
-      // P = softmax(S * scaleFactor)
-      \(softmax(derivative: false))
-      
-      // l = reduce(l)
-      \(onlineReduceSum())
-      
-      // O *= correction
-      // O += P * V
-      // O /= l
-      \(PV)
-    }
-    
-    """
+
+      // Outer loop over the traversal dimension.
+      for (uint c = 0; c < C; c += \(blockDimensions.traversal)) {
+        // S = Q * K^T
+        \(QKT)
+        \(maskAttentionMatrixEdge())
+        \(maskSparsityPattern())
+
+        // m = reduce(m)
+        \(onlineReduceMaximum())
+        
+        // correction = exp(m_old) / exp(m_new)
+        \(onlineCorrectO())
+        
+        // P = softmax(S * scaleFactor)
+        \(softmax(derivative: false))
+        
+        // l = reduce(l)
+        \(onlineReduceSum())
+        
+        // O *= correction
+        // O += P * V
+        // O /= l
+        \(PV)
+      }
+
+      """
   }
-  
+
   func loopBackwardQuery() -> String {
     var outerProductDesc = AttentionOuterProductDescriptor()
     outerProductDesc.A = .Q
     outerProductDesc.B = .K
     outerProductDesc.C = .S
     let QKT = outerProduct(descriptor: outerProductDesc)
-    
+
     outerProductDesc = AttentionOuterProductDescriptor()
     outerProductDesc.A = .dO
     outerProductDesc.B = .V
     outerProductDesc.C = .dP
     let dOVT = outerProduct(descriptor: outerProductDesc)
-    
+
     var accumulateDesc = AttentionAccumulateDescriptor()
     accumulateDesc.A = .dS
     accumulateDesc.B = .K
     accumulateDesc.C = .dQ
     let dSK = accumulate(descriptor: accumulateDesc)
-    
-    return """
-    
-    // Outer loop over the traversal dimension.
-    for (uint c = 0; c < C; c += \(blockDimensions.traversal)) {
-      // S = Q * K^T
-      \(QKT)
-      \(maskAttentionMatrix())
 
-      // P = softmax(S * scaleFactor)
-      \(softmax(derivative: false))
-      
-      // dP = dO * V^T
-      \(dOVT)
-      
-      // dS = P * (dP - D) * scaleFactor
-      \(softmax(derivative: true))
-      
-      // dQ += dS * K
-      \(dSK)
-    }
-    
-    """
+    return """
+
+      // Outer loop over the traversal dimension.
+      for (uint c = 0; c < C; c += \(blockDimensions.traversal)) {
+        // S = Q * K^T
+        \(QKT)
+        \(maskSparsityPattern())
+
+        // P = softmax(S * scaleFactor)
+        \(softmax(derivative: false))
+        
+        // dP = dO * V^T
+        \(dOVT)
+        
+        // dS = P * (dP - D) * scaleFactor
+        \(softmax(derivative: true))
+        
+        // dQ += dS * K
+        \(dSK)
+      }
+
+      """
   }
-  
+
   func loopBackwardKeyValue() -> String {
     var outerProductDesc = AttentionOuterProductDescriptor()
     outerProductDesc.A = .K
     outerProductDesc.B = .Q
-    outerProductDesc.C = .S // S^T
+    outerProductDesc.C = .S  // S^T
     let KQT = outerProduct(descriptor: outerProductDesc)
-    
+
     var accumulateDesc = AttentionAccumulateDescriptor()
-    accumulateDesc.A = .P // P^T
+    accumulateDesc.A = .P  // P^T
     accumulateDesc.B = .dO
     accumulateDesc.C = .dV
     let PTdO = accumulate(descriptor: accumulateDesc)
-    
+
     outerProductDesc = AttentionOuterProductDescriptor()
     outerProductDesc.A = .V
     outerProductDesc.B = .dO
-    outerProductDesc.C = .dP // dP^T
+    outerProductDesc.C = .dP  // dP^T
     let VdOT = outerProduct(descriptor: outerProductDesc)
-    
+
     accumulateDesc = AttentionAccumulateDescriptor()
-    accumulateDesc.A = .dS // dS^T
+    accumulateDesc.A = .dS  // dS^T
     accumulateDesc.B = .Q
     accumulateDesc.C = .dK
     let dSTQ = accumulate(descriptor: accumulateDesc)
-    
-    return """
-    
-    // Outer loop over the traversal dimension.
-    for (uint r = 0; r < R; r += \(blockDimensions.traversal)) {
-      // S^T = K * Q^T
-      \(KQT)
-      \(maskAttentionMatrixTransposed())
 
-      // P^T = exp(S^T - L)
-      \(softmax(derivative: false))
-      
-      // dV += P^T * dO
-      \(PTdO)
-      
-      // dP^T = V * dO^T
-      \(VdOT)
-      
-      // dS^T = P^T * (dP^T - D) * scaleFactor
-      \(softmax(derivative: true))
-      
-      // dK += dS^T * Q
-      \(dSTQ)
-    }
-    
-    """
+    return """
+
+      // Outer loop over the traversal dimension.
+      for (uint r = 0; r < R; r += \(blockDimensions.traversal)) {
+        // S^T = K * Q^T
+        \(KQT)
+        \(maskSparsityPatternTransposed())
+
+        // P^T = exp(S^T - L)
+        \(softmax(derivative: false))
+        
+        // dV += P^T * dO
+        \(PTdO)
+        
+        // dP^T = V * dO^T
+        \(VdOT)
+        
+        // dS^T = P^T * (dP^T - D) * scaleFactor
+        \(softmax(derivative: true))
+        
+        // dK += dS^T * Q
+        \(dSTQ)
+      }
+
+      """
   }
 }

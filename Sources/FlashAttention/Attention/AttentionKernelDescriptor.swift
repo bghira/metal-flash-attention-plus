@@ -6,25 +6,27 @@
 //
 
 public struct AttentionKernelDescriptor {
-  public var blockDimensions: (
-    parallelization: UInt16, traversal: UInt16, head: UInt16)?
-  
+  public var blockDimensions:
+    (
+      parallelization: UInt16, traversal: UInt16, head: UInt16
+    )?
+
   /// Whether each operand is cached in registers.
   public var cacheState: [AttentionOperand: Bool] = [:]
-  
+
   /// Required. The problem size along the head dimension.
   public var headDimension: UInt16?
-  
+
   public var memoryPrecisions: [AttentionOperand: GEMMOperandPrecision] = [:]
-  
+
   /// Reads with a one-to-one mapping to threads (like GEMM store) and writes.
   public var preferAsyncCache: Bool?
-  
+
   /// Reads that are shared among threads (like GEMM load).
   public var preferAsyncLoad: Bool?
-  
+
   public var registerPrecisions: [AttentionOperand: GEMMOperandPrecision] = [:]
-  
+
   /// Whether each operand is transposed in RAM.
   ///
   /// If the layout is row-major, where a row spans D contiguous elements in
@@ -40,10 +42,8 @@ public struct AttentionKernelDescriptor {
   /// value of H is known at compile time, so the product `D * H` can be
   /// embedded into the GPU assembly code.
   public var transposeState: [AttentionOperand: Bool] = [:]
-  
-  public var type: AttentionKernelType?
 
-  public var maskType: AttentionMaskType = .none
+  public var type: AttentionKernelType?
 
   public init() {
 

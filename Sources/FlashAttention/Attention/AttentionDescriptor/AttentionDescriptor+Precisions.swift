@@ -9,7 +9,7 @@ extension AttentionDescriptor {
   // This is an expensive computed property. Access it sparingly!
   public var memoryPrecisions: [AttentionOperand: GEMMOperandPrecision] {
     var memoryPrecisions: [AttentionOperand: GEMMOperandPrecision] = [:]
-    
+
     if lowPrecisionInputs {
       memoryPrecisions[.Q] = .FP16
       memoryPrecisions[.K] = .FP16
@@ -21,7 +21,7 @@ extension AttentionDescriptor {
       memoryPrecisions[.V] = .FP32
       memoryPrecisions[.dO] = .FP32
     }
-    
+
     // Rounding error. In the test that reported these errors, the average
     // magnitude of any scalar was typically 1.0 to 10.0.
     //
@@ -85,7 +85,7 @@ extension AttentionDescriptor {
       memoryPrecisions[.L] = .FP32
       memoryPrecisions[.D] = .FP32
     }
-    
+
     // Data for low precision outputs.
     //
     // Traversal block = 64, sequence length = 256, head size = 32
@@ -141,19 +141,19 @@ extension AttentionDescriptor {
     memoryPrecisions[.dV] = .FP32
     memoryPrecisions[.dK] = .FP32
     memoryPrecisions[.dQ] = .FP32
-    
+
     return memoryPrecisions
   }
-  
+
   // This is an expensive computed property. Access it sparingly!
   public var registerPrecisions: [AttentionOperand: GEMMOperandPrecision] {
     var registerPrecisions: [AttentionOperand: GEMMOperandPrecision] = [:]
-    
+
     // Query whether the hardware fuses the promotion of BF16 to FP32 with
     // the FMA assembly instruction.
     let device = MTLContext.global.device
     let hasNativeBF16Casting = device.supportsFamily(.apple9)
-    
+
     // Inputs have the same register precision across kernels.
     if lowPrecisionInputs {
       registerPrecisions[.Q] = .FP16
@@ -166,7 +166,7 @@ extension AttentionDescriptor {
       registerPrecisions[.V] = .FP32
       registerPrecisions[.dO] = .FP32
     }
-    
+
     // The register precision of L/D only counts for backward key-value.
     if lowPrecisionIntermediates {
       registerPrecisions[.L] = .FP16
@@ -175,7 +175,7 @@ extension AttentionDescriptor {
       registerPrecisions[.L] = .FP32
       registerPrecisions[.D] = .FP32
     }
-    
+
     // The register precision for the attention matrix.
     if lowPrecisionIntermediates {
       // There is a special FP16xFP16->FP16 instruction that reaches peak ALU
@@ -204,13 +204,13 @@ extension AttentionDescriptor {
       registerPrecisions[.dP] = .FP32
       registerPrecisions[.dS] = .FP32
     }
-    
+
     // All of the outputs are accumulated in FP32.
     registerPrecisions[.O] = .FP32
     registerPrecisions[.dV] = .FP32
     registerPrecisions[.dK] = .FP32
     registerPrecisions[.dQ] = .FP32
-    
+
     return registerPrecisions
   }
 }

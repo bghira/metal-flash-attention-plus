@@ -7,27 +7,29 @@
 
 import Metal
 
-public enum AttentionMaskType {
+public enum SparsityPattern {
   case none
   case causal
-  case custom
+  case slidingWindow(windowSize: UInt32)
+  case custom(blockMask: [Bool], blockSize: (row: UInt16, col: UInt16))
 }
 
 public struct AttentionDescriptor {
   // Q, K, V, dO
   public var lowPrecisionInputs: Bool = false
-  
+
   // S, P, L, D, dP, dS
   public var lowPrecisionIntermediates: Bool = false
-  
+
   // row:    Output sequence length; rows of the attention matrix.
   // column: Input sequence length; columns of the attention matrix.
   // head:   Head dimension, typically 32 - 256.
   public var matrixDimensions: (row: UInt32, column: UInt32, head: UInt16)?
-  
+
   public var transposeState: (Q: Bool, K: Bool, V: Bool, O: Bool)?
 
-  public var maskType: AttentionMaskType = .none
+  // Sparsity pattern for attention matrix
+  public var sparsityPattern: SparsityPattern = .none
 
   public init() {
 
@@ -45,22 +47,23 @@ extension AttentionDescriptor {
     let file = parameterFile(type: type)
     let table = AttentionParameterRow.parseTable(file)
     let row = row(table: table)
-    
+
     func createBlockDimensions() -> (UInt16, UInt16, UInt16) {
       guard let parallelization = UInt16(row.parallelization),
-            let traversal = UInt16(row.traversal),
-            let originalHead = UInt16(row.head) else {
+        let traversal = UInt16(row.traversal),
+        let originalHead = UInt16(row.head)
+      else {
         fatalError("Could not decode block dimensions.")
       }
-      
+
       // Enforce the rule that head block dimension <= head dimension.
       let headDimension = createHeadDimension()
       let paddedHeadDimension = (headDimension + 7) / 8 * 8
       let revisedHead = min(originalHead, paddedHeadDimension)
-      
+
       return (parallelization, traversal, revisedHead)
     }
-    
+
     func createCacheState() -> [AttentionOperand: Bool] {
       var expectedOperands: Set<AttentionOperand>
       switch type {
@@ -71,16 +74,17 @@ extension AttentionDescriptor {
       case .backwardKeyValue:
         expectedOperands = [.K, .V, .dV, .dK]
       }
-      
+
       // Check for unexpected operands.
-      let cachedOperands = AttentionParameterRow
+      let cachedOperands =
+        AttentionParameterRow
         .parseOperands(row.cachedOperands)
       for operand in cachedOperands {
         guard expectedOperands.contains(operand) else {
           fatalError("Unexpected operand: \(operand)")
         }
       }
-      
+
       // Convert the list into a dictionary.
       var output: [AttentionOperand: Bool] = [:]
       for operand in expectedOperands {
@@ -89,35 +93,35 @@ extension AttentionDescriptor {
       for operand in cachedOperands {
         output[operand] = true
       }
-      
+
       return output
     }
-    
+
     func createHeadDimension() -> UInt16 {
       guard let matrixDimensions = self.matrixDimensions else {
         fatalError("Descriptor was incomplete.")
       }
       return matrixDimensions.head
     }
-    
+
     func createTransposeState() -> [AttentionOperand: Bool] {
       guard let transposeState = self.transposeState else {
         fatalError("Descriptor was incomplete.")
       }
-      
+
       var output: [AttentionOperand: Bool] = [:]
       output[.Q] = transposeState.Q
       output[.K] = transposeState.K
       output[.V] = transposeState.V
       output[.O] = transposeState.O
-      
+
       output[.dO] = transposeState.O
       output[.dV] = transposeState.V
       output[.dK] = transposeState.K
       output[.dQ] = transposeState.Q
       return output
     }
-    
+
     var output = AttentionKernelDescriptor()
     output.blockDimensions = createBlockDimensions()
     output.cacheState = createCacheState()
@@ -133,7 +137,6 @@ extension AttentionDescriptor {
     output.registerPrecisions = registerPrecisions
     output.transposeState = createTransposeState()
     output.type = type
-    output.maskType = maskType
 
     return output
   }
@@ -149,10 +152,33 @@ extension AttentionDescriptor {
     guard let matrixDimensions = self.matrixDimensions else {
       fatalError("Descriptor was incomplete.")
     }
-    
+
     var rowDimension = matrixDimensions.row
     var columnDimension = matrixDimensions.column
     constants.setConstantValue(&rowDimension, type: .uint, index: 0)
     constants.setConstantValue(&columnDimension, type: .uint, index: 1)
+
+    // Add sparsity pattern constants
+    var hasSlidingWindow: Bool = false
+    var windowSize: UInt32 = 0
+    var isCausal: Bool = false
+
+    switch sparsityPattern {
+    case .none:
+      break
+    case .causal:
+      isCausal = true
+    case .slidingWindow(let size):
+      hasSlidingWindow = true
+      windowSize = size
+    case .custom:
+      // For now, treat custom patterns as no sparsity
+      // TODO: Implement custom block mask support
+      break
+    }
+
+    constants.setConstantValue(&hasSlidingWindow, type: .bool, index: 2)
+    constants.setConstantValue(&windowSize, type: .uint, index: 3)
+    constants.setConstantValue(&isCausal, type: .bool, index: 4)
   }
 }

@@ -114,7 +114,7 @@ public struct GEMMKernelDescriptor {
   ///   choose large block size (48x48x32xFP16)
   /// ```
   public var blockDimensions: (M: UInt16, N: UInt16, K: UInt16)?
-  
+
   /// Optional. The layout of elements in threadgroup memory.
   ///
   /// If not specified, the default value matches the actual block dimensions.
@@ -124,10 +124,12 @@ public struct GEMMKernelDescriptor {
   /// increased bank conflicts on M1. One may pad that threadgroup memory
   /// allocation to 20 FP32 elements per row.
   public var leadingBlockDimensions: (A: UInt16, B: UInt16, C: UInt16)?
-  
-  public var memoryPrecisions: (
-    A: GEMMOperandPrecision, B: GEMMOperandPrecision, C: GEMMOperandPrecision)?
-  
+
+  public var memoryPrecisions:
+    (
+      A: GEMMOperandPrecision, B: GEMMOperandPrecision, C: GEMMOperandPrecision
+    )?
+
   /// Required. Whether async copies will improve performance during the
   /// matrix multiplication loop.
   ///
@@ -137,13 +139,13 @@ public struct GEMMKernelDescriptor {
   /// matrices. Setting the value to `false` means skipping async copies when
   /// doing so will not change the final result.
   public var preferAsyncLoad: Bool = true
-  
+
   /// Required. Whether async copies will improve performance when storing the
   /// accumulator to main memory.
   ///
   /// There is no default value that will reliably yield consistent performance.
   public var preferAsyncStore: Bool?
-  
+
   /// Set the register precision based on the GPU architecture, and your choice
   /// for memory precision. The following set of logic statements should provide
   /// optimal performance for all permutations of operand precisions.
@@ -162,21 +164,23 @@ public struct GEMMKernelDescriptor {
   ///   If memB is BF16,
   ///     regB is FP32
   /// ```
-  public var registerPrecisions: (
-    A: GEMMOperandPrecision, B: GEMMOperandPrecision, C: GEMMOperandPrecision)?
-  
+  public var registerPrecisions:
+    (
+      A: GEMMOperandPrecision, B: GEMMOperandPrecision, C: GEMMOperandPrecision
+    )?
+
   /// Required. The array of SIMDs to divide the threadgroup into.
   ///
   /// Optimal values:
   /// - Apple7 and Apple8: 2x2
   /// - Apple9 and later: 1x1
   public var splits: (M: UInt16, N: UInt16)?
-  
+
   /// Required. Whether each of the inputs deviates from row-major order.
   public var transposeState: (A: Bool, B: Bool)?
-  
+
   public init() {
-    
+
   }
 }
 
@@ -189,7 +193,7 @@ struct GEMMKernelKey: Equatable, Hashable {
   var registerPrecisions: SIMD3<UInt16>
   var splits: SIMD2<UInt16>
   var transposeState: SIMD2<UInt8>
-  
+
   init(copying source: GEMMKernelDescriptor) {
     blockDimensions = Self.createBlockDimensions(source.blockDimensions)
     leadingBlockDimensions = Self.createBlockDimensions(
@@ -198,7 +202,7 @@ struct GEMMKernelKey: Equatable, Hashable {
     preferAsyncLoad = Self.createBoolean(source.preferAsyncLoad)
     preferAsyncStore = Self.createBoolean(source.preferAsyncStore)
     registerPrecisions = Self.createPrecisions(source.registerPrecisions)
-    
+
     splits = SIMD2(repeating: .max)
     if let (M, N) = source.splits {
       splits[0] = M
@@ -206,8 +210,8 @@ struct GEMMKernelKey: Equatable, Hashable {
     }
     transposeState = Self.createTransposeState(source.transposeState)
   }
-  
-  @_transparent // performance in -Ounchecked
+
+  @_transparent  // performance in -Ounchecked
   static func createBlockDimensions(
     _ input: (UInt16, UInt16, UInt16)?
   ) -> SIMD3<UInt16> {
@@ -217,8 +221,8 @@ struct GEMMKernelKey: Equatable, Hashable {
       return SIMD3(repeating: .max)
     }
   }
-  
-  @_transparent // performance in -Ounchecked
+
+  @_transparent  // performance in -Ounchecked
   static func createBoolean(
     _ input: Bool?
   ) -> UInt8 {
@@ -228,11 +232,12 @@ struct GEMMKernelKey: Equatable, Hashable {
       return UInt8.max
     }
   }
-  
-  @_transparent // performance in -Ounchecked
+
+  @_transparent  // performance in -Ounchecked
   static func createPrecisions(
     _ input: (
-      GEMMOperandPrecision, GEMMOperandPrecision, GEMMOperandPrecision)?
+      GEMMOperandPrecision, GEMMOperandPrecision, GEMMOperandPrecision
+    )?
   ) -> SIMD3<UInt16> {
     if let input {
       return SIMD3(input.0.rawValue, input.1.rawValue, input.2.rawValue)
@@ -240,14 +245,15 @@ struct GEMMKernelKey: Equatable, Hashable {
       return SIMD3(repeating: .max)
     }
   }
-  
-  @_transparent // performance in -Ounchecked
+
+  @_transparent  // performance in -Ounchecked
   static func createTransposeState(
     _ input: (Bool, Bool)?
   ) -> SIMD2<UInt8> {
     if let input {
-      return SIMD2(input.0 ? 1 : 0,
-                   input.1 ? 1 : 0)
+      return SIMD2(
+        input.0 ? 1 : 0,
+        input.1 ? 1 : 0)
     } else {
       return SIMD2(repeating: .max)
     }
@@ -256,14 +262,14 @@ struct GEMMKernelKey: Equatable, Hashable {
 
 extension GEMMKernelDescriptor: Hashable, Equatable {
   public static func == (
-    lhs: GEMMKernelDescriptor, 
+    lhs: GEMMKernelDescriptor,
     rhs: GEMMKernelDescriptor
   ) -> Bool {
     let lhsKey = GEMMKernelKey(copying: lhs)
     let rhsKey = GEMMKernelKey(copying: rhs)
     return lhsKey == rhsKey
   }
-  
+
   public func hash(into hasher: inout Hasher) {
     let key = GEMMKernelKey(copying: self)
     hasher.combine(key)

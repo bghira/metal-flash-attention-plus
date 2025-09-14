@@ -13,17 +13,17 @@ public enum AttentionOperand: Hashable, Equatable, CustomStringConvertible {
   case P
   case V
   case O
-  
+
   case L
   case D
-  
+
   case dO
   case dV
   case dP
   case dS
   case dK
   case dQ
-  
+
   /// The name in the shader source.
   ///
   /// Since the `AttentionOperand` type conforms to `CustomStringConvertible`,
@@ -36,10 +36,10 @@ public enum AttentionOperand: Hashable, Equatable, CustomStringConvertible {
     case .P: return "P"
     case .V: return "V"
     case .O: return "O"
-      
+
     case .L: return "L"
     case .D: return "D"
-      
+
     case .dO: return "dO"
     case .dV: return "dV"
     case .dP: return "dP"
@@ -48,7 +48,7 @@ public enum AttentionOperand: Hashable, Equatable, CustomStringConvertible {
     case .dQ: return "dQ"
     }
   }
-  
+
   public var bufferBinding: UInt8? {
     switch self {
     case .Q: return 0
@@ -57,10 +57,10 @@ public enum AttentionOperand: Hashable, Equatable, CustomStringConvertible {
     case .P: return nil
     case .V: return 2
     case .O: return 3
-      
+
     case .L: return 4
     case .D: return 5
-      
+
     case .dO: return 6
     case .dV: return 7
     case .dP: return nil

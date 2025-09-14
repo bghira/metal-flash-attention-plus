@@ -8,7 +8,7 @@ extension MTLContext {
   ) -> MTLBuffer {
     // Add random numbers to expose out-of-bounds accesses.
     var augmentedData = originalData
-    
+
     // Avoid exceeding the maximum buffer allocation size.
     if originalData.count * 4 < 1_000_000_000 {
       for _ in 0..<originalData.count {
@@ -16,11 +16,11 @@ extension MTLContext {
         augmentedData.append(randomNumber)
       }
     }
-    
+
     // Allocate enough memory to store everything in Float32.
     let bufferSize = augmentedData.count * 4
     let buffer = device.makeBuffer(length: bufferSize)!
-    
+
     // Copy the data into the buffer.
     switch precision {
     case .FP32:
@@ -43,7 +43,7 @@ extension MTLContext {
     }
     return buffer
   }
-  
+
   static func copy(
     _ buffer: MTLBuffer,
     into array: inout [Float],
@@ -53,12 +53,12 @@ extension MTLContext {
     guard buffer.length >= expectedLength else {
       fatalError("Buffer was too small.")
     }
-            
+
     let raw = buffer.contents()
     for elementID in array.indices {
       let address = elementID
       var entry32: Float
-      
+
       switch precision {
       case .FP32:
         let casted = raw.assumingMemoryBound(to: Float.self)

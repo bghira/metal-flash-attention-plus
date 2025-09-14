@@ -10,9 +10,9 @@ import Metal
 public struct MTLContext {
   public var device: MTLDevice
   public var commandQueue: MTLCommandQueue
-  
+
   public static let global = MTLContext()
-  
+
   public init() {
     device = MTLCreateSystemDefaultDevice()!
     commandQueue = device.makeCommandQueue()!

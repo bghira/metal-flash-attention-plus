@@ -9,39 +9,44 @@ import protocol Metal.MTLLibrary
 
 public struct GEMMKernel {
   // Categorical attributes for each operand.
-  var memoryPrecisions: (
-    A: GEMMOperandPrecision, B: GEMMOperandPrecision, C: GEMMOperandPrecision)
+  var memoryPrecisions:
+    (
+      A: GEMMOperandPrecision, B: GEMMOperandPrecision, C: GEMMOperandPrecision
+    )
   var preferAsyncLoad: Bool
   var preferAsyncStore: Bool
-  var registerPrecisions: (
-    A: GEMMOperandPrecision, B: GEMMOperandPrecision, C: GEMMOperandPrecision)
+  var registerPrecisions:
+    (
+      A: GEMMOperandPrecision, B: GEMMOperandPrecision, C: GEMMOperandPrecision
+    )
   var transposeState: (A: Bool, B: Bool)
-  
+
   // Layout of the data in registers and threadgroup memory.
   public var blockDimensions: (M: UInt16, N: UInt16, K: UInt16)
   var leadingBlockDimensions: (A: UInt16, B: UInt16, C: UInt16)
   var splits: (M: UInt16, N: UInt16)
   public var threadgroupMemoryAllocation: UInt16
-  
+
   public init(descriptor: GEMMKernelDescriptor) {
     guard let blockDimensions = descriptor.blockDimensions,
-          let memoryPrecisions = descriptor.memoryPrecisions,
-          let preferAsyncStore = descriptor.preferAsyncStore,
-          let registerPrecisions = descriptor.registerPrecisions,
-          let splits = descriptor.splits,
-          let transposeState = descriptor.transposeState else {
+      let memoryPrecisions = descriptor.memoryPrecisions,
+      let preferAsyncStore = descriptor.preferAsyncStore,
+      let registerPrecisions = descriptor.registerPrecisions,
+      let splits = descriptor.splits,
+      let transposeState = descriptor.transposeState
+    else {
       fatalError("Descriptor was incomplete: \(descriptor)")
     }
-    
+
     self.memoryPrecisions = memoryPrecisions
     self.preferAsyncLoad = descriptor.preferAsyncLoad
     self.preferAsyncStore = preferAsyncStore
     self.registerPrecisions = registerPrecisions
-    
+
     self.blockDimensions = blockDimensions
     self.splits = splits
     self.transposeState = transposeState
-    
+
     // Validate the correctness of register precisions.
     func checkOperandPair(
       memory: GEMMOperandPrecision,
@@ -82,17 +87,23 @@ public struct GEMMKernel {
         return false
       }
     }
-    
-    guard checkOperandPair(
-      memory: memoryPrecisions.A, register: registerPrecisions.A) else {
+
+    guard
+      checkOperandPair(
+        memory: memoryPrecisions.A, register: registerPrecisions.A)
+    else {
       fatalError("Operand A had an invalid register precision.")
     }
-    guard checkOperandPair(
-      memory: memoryPrecisions.B, register: registerPrecisions.B) else {
+    guard
+      checkOperandPair(
+        memory: memoryPrecisions.B, register: registerPrecisions.B)
+    else {
       fatalError("Operand B had an invalid register precision.")
     }
-    guard checkOperandPair(
-      memory: memoryPrecisions.C, register: registerPrecisions.C) else {
+    guard
+      checkOperandPair(
+        memory: memoryPrecisions.C, register: registerPrecisions.C)
+    else {
       fatalError("Operand C had an invalid register precision.")
     }
     if registerPrecisions.C == .BF16 {
@@ -101,7 +112,7 @@ public struct GEMMKernel {
       // down execution speed on both M1/M2 and M3+.
       fatalError("BF16 cannot be used as the register precision for C.")
     }
-    
+
     // Retrieve the "padded" block dimensions, otherwise compute analytically
     // from the true block dimensions.
     func chooseLeadingBlockDimension(
@@ -116,7 +127,7 @@ public struct GEMMKernel {
       } else {
         expectedLeading = untransposedColumns
       }
-      
+
       var actualLeading: UInt16
       if let specifiedLeading {
         guard specifiedLeading >= expectedLeading else {
@@ -126,10 +137,10 @@ public struct GEMMKernel {
       } else {
         actualLeading = expectedLeading
       }
-      
+
       return actualLeading
     }
-    
+
     // Pick the leading block dimensions.
     leadingBlockDimensions = (.zero, .zero, .zero)
     leadingBlockDimensions.A = chooseLeadingBlockDimension(
@@ -147,7 +158,7 @@ public struct GEMMKernel {
       transposeState: false,
       untransposedRows: blockDimensions.M,
       untransposedColumns: blockDimensions.N)
-    
+
     // Pick the threadgroup memory allocation size.
     threadgroupMemoryAllocation = .zero
     threadgroupMemoryAllocation = createThreadgroupMemoryAllocation()
@@ -164,7 +175,7 @@ extension GEMMKernel {
       fatalError("Unrecognized operand.")
     }
   }
-  
+
   func registerName(_ operand: String) -> String {
     switch operand {
     case "A": return registerPrecisions.A.name
@@ -174,7 +185,7 @@ extension GEMMKernel {
       fatalError("Unrecognized operand.")
     }
   }
-  
+
   func transposed(_ operand: String) -> Bool {
     switch operand {
     case "A": return transposeState.A
@@ -189,7 +200,7 @@ extension GEMMKernel {
   func leadingDimension(_ operand: String) -> String {
     return "\(operand)_leading_dimension"
   }
-  
+
   func leadingBlockDimension(_ operand: String) -> UInt16 {
     switch operand {
     case "A": return leadingBlockDimensions.A
@@ -198,7 +209,7 @@ extension GEMMKernel {
     default: fatalError("Unrecognized operand.")
     }
   }
-  
+
   func trailingBlockDimension(_ operand: String) -> UInt16 {
     func chooseTrailingBlockDimension(
       _ transposeState: Bool,
@@ -211,7 +222,7 @@ extension GEMMKernel {
         return untransposedRows
       }
     }
-    
+
     switch operand {
     case "A":
       return chooseTrailingBlockDimension(
@@ -226,12 +237,12 @@ extension GEMMKernel {
       fatalError("Unrecognized operand.")
     }
   }
-  
+
   func blockBytes(_ operand: String) -> UInt16 {
     var output: UInt16 = 1
     output *= leadingBlockDimension(operand)
     output *= trailingBlockDimension(operand)
-    
+
     var memoryPrecision: GEMMOperandPrecision
     switch operand {
     case "A":
@@ -252,15 +263,15 @@ extension GEMMKernel {
   var registerM: UInt16 {
     blockDimensions.M / splits.M
   }
-  
+
   var registerN: UInt16 {
     blockDimensions.N / splits.N
   }
-  
+
   public var threadgroupSize: UInt16 {
     32 * splits.M * splits.N
   }
-  
+
   private func createThreadgroupMemoryAllocation() -> UInt16 {
     let blockBytesA = self.blockBytes("A")
     let blockBytesB = self.blockBytes("B")
