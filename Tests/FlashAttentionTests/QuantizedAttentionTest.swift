@@ -360,26 +360,28 @@ final class QuantizedAttentionTest: XCTestCase {
     )
 
     // Create buffers for gradients and intermediate values
-    guard let gradOutputBuffer = device.makeBuffer(
-      bytes: gradOutputData,
-      length: totalElements * MemoryLayout<Float>.size,
-      options: .storageModeShared),
+    guard
+      let gradOutputBuffer = device.makeBuffer(
+        bytes: gradOutputData,
+        length: totalElements * MemoryLayout<Float>.size,
+        options: .storageModeShared),
       let logsumexpBuffer = device.makeBuffer(
-      bytes: logsumexpData,
-      length: sequenceLength * MemoryLayout<Float>.size,
-      options: .storageModeShared),
+        bytes: logsumexpData,
+        length: sequenceLength * MemoryLayout<Float>.size,
+        options: .storageModeShared),
       let gradQueryBuffer = device.makeBuffer(
-      length: totalElements * MemoryLayout<Float>.size,
-      options: .storageModeShared),
+        length: totalElements * MemoryLayout<Float>.size,
+        options: .storageModeShared),
       let gradKeyBuffer = device.makeBuffer(
-      length: totalElements * MemoryLayout<Float>.size,
-      options: .storageModeShared),
+        length: totalElements * MemoryLayout<Float>.size,
+        options: .storageModeShared),
       let gradValueBuffer = device.makeBuffer(
-      length: totalElements * MemoryLayout<Float>.size,
-      options: .storageModeShared),
+        length: totalElements * MemoryLayout<Float>.size,
+        options: .storageModeShared),
       let dValuesBuffer = device.makeBuffer(
-      length: sequenceLength * MemoryLayout<Float>.size,
-      options: .storageModeShared) else {
+        length: sequenceLength * MemoryLayout<Float>.size,
+        options: .storageModeShared)
+    else {
       XCTFail("Failed to create buffers")
       return
     }
@@ -399,16 +401,18 @@ final class QuantizedAttentionTest: XCTestCase {
     )
 
     // Test backward query pass
-    guard let queryCommandBuffer = quantizedAttention.backwardQuery(
-      query: tensors.query,
-      key: tensors.key,
-      value: tensors.value,
-      gradOutput: gradOutputBuffer,
-      logsumexp: logsumexpBuffer,
-      gradQuery: gradQueryBuffer,
-      dValues: dValuesBuffer,
-      descriptor: descriptor
-    ) else {
+    guard
+      let queryCommandBuffer = quantizedAttention.backwardQuery(
+        query: tensors.query,
+        key: tensors.key,
+        value: tensors.value,
+        gradOutput: gradOutputBuffer,
+        logsumexp: logsumexpBuffer,
+        gradQuery: gradQueryBuffer,
+        dValues: dValuesBuffer,
+        descriptor: descriptor
+      )
+    else {
       XCTFail("Failed to create backward query command buffer")
       return
     }
@@ -416,20 +420,24 @@ final class QuantizedAttentionTest: XCTestCase {
     queryCommandBuffer.commit()
     queryCommandBuffer.waitUntilCompleted()
 
-    XCTAssertNil(queryCommandBuffer.error, "Backward query pass failed: \(queryCommandBuffer.error?.localizedDescription ?? "")")
+    XCTAssertNil(
+      queryCommandBuffer.error,
+      "Backward query pass failed: \(queryCommandBuffer.error?.localizedDescription ?? "")")
 
     // Test backward key-value pass
-    guard let kvCommandBuffer = quantizedAttention.backwardKeyValue(
-      query: tensors.query,
-      key: tensors.key,
-      value: tensors.value,
-      gradOutput: gradOutputBuffer,
-      logsumexp: logsumexpBuffer,
-      dValues: dValuesBuffer,
-      gradKey: gradKeyBuffer,
-      gradValue: gradValueBuffer,
-      descriptor: descriptor
-    ) else {
+    guard
+      let kvCommandBuffer = quantizedAttention.backwardKeyValue(
+        query: tensors.query,
+        key: tensors.key,
+        value: tensors.value,
+        gradOutput: gradOutputBuffer,
+        logsumexp: logsumexpBuffer,
+        dValues: dValuesBuffer,
+        gradKey: gradKeyBuffer,
+        gradValue: gradValueBuffer,
+        descriptor: descriptor
+      )
+    else {
       XCTFail("Failed to create backward key-value command buffer")
       return
     }
@@ -437,12 +445,16 @@ final class QuantizedAttentionTest: XCTestCase {
     kvCommandBuffer.commit()
     kvCommandBuffer.waitUntilCompleted()
 
-    XCTAssertNil(kvCommandBuffer.error, "Backward key-value pass failed: \(kvCommandBuffer.error?.localizedDescription ?? "")")
+    XCTAssertNil(
+      kvCommandBuffer.error,
+      "Backward key-value pass failed: \(kvCommandBuffer.error?.localizedDescription ?? "")")
 
     // Verify gradients are not all zeros
-    let gradQueryPtr = gradQueryBuffer.contents().bindMemory(to: Float.self, capacity: totalElements)
+    let gradQueryPtr = gradQueryBuffer.contents().bindMemory(
+      to: Float.self, capacity: totalElements)
     let gradKeyPtr = gradKeyBuffer.contents().bindMemory(to: Float.self, capacity: totalElements)
-    let gradValuePtr = gradValueBuffer.contents().bindMemory(to: Float.self, capacity: totalElements)
+    let gradValuePtr = gradValueBuffer.contents().bindMemory(
+      to: Float.self, capacity: totalElements)
 
     var queryGradNorm: Float = 0
     var keyGradNorm: Float = 0
