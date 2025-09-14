@@ -179,7 +179,10 @@ public class QuantizedTensor {
 
     if precision.requiresQuantizationParameters {
       parameters = floatData.withUnsafeBufferPointer { buffer in
-        precision.calculateQuantizationParameters(data: buffer.baseAddress!, count: elementCount)
+        guard let baseAddress = buffer.baseAddress else {
+          fatalError("Cannot calculate quantization parameters: input floatData is empty.")
+        }
+        return precision.calculateQuantizationParameters(data: baseAddress, count: elementCount)
       }
       bufferSize = precision == .INT4 ? (elementCount + 1) / 2 : elementCount * precision.size
     } else {

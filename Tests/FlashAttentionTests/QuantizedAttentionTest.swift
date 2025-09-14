@@ -61,8 +61,11 @@ final class QuantizedAttentionTest: XCTestCase {
     // Test INT8 round-trip
     do {
       let params = originalData.withUnsafeBufferPointer { buffer in
-        GEMMOperandPrecision.INT8.calculateQuantizationParameters(
-          data: buffer.baseAddress!,
+        guard let baseAddress = buffer.baseAddress else {
+          fatalError("Test data cannot be empty for quantization parameter calculation")
+        }
+        return GEMMOperandPrecision.INT8.calculateQuantizationParameters(
+          data: baseAddress,
           count: count
         )
       }
@@ -105,8 +108,11 @@ final class QuantizedAttentionTest: XCTestCase {
     // Test INT4 round-trip
     do {
       let params = originalData.withUnsafeBufferPointer { buffer in
-        GEMMOperandPrecision.INT4.calculateQuantizationParameters(
-          data: buffer.baseAddress!,
+        guard let baseAddress = buffer.baseAddress else {
+          fatalError("Test data cannot be empty for quantization parameter calculation")
+        }
+        return GEMMOperandPrecision.INT4.calculateQuantizationParameters(
+          data: baseAddress,
           count: count
         )
       }
