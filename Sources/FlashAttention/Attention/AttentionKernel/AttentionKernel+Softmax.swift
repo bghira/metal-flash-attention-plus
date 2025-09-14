@@ -224,6 +224,174 @@ extension AttentionKernel {
 // MARK: - Mask
 
 extension AttentionKernel {
+  // Apply attention masking (causal or custom) to the attention matrix.
+  func maskAttentionMatrix() -> String {
+    switch maskType {
+    case .none:
+      return ""
+    case .causal:
+      return maskCausal()
+    case .custom:
+      return maskCustom()
+    }
+  }
+
+  // Apply attention masking to the transposed attention matrix (for backward key-value).
+  func maskAttentionMatrixTransposed() -> String {
+    switch maskType {
+    case .none:
+      return ""
+    case .causal:
+      return maskCausalTransposed()
+    case .custom:
+      return maskCustomTransposed()
+    }
+  }
+
+  // Apply causal masking (lower triangular mask).
+  func maskCausal() -> String {
+    let logBase2E: Float = 1.442695041
+    return """
+
+    // Apply causal masking: mask out entries above the main diagonal
+    {
+      const \(registerName(.S)) mask_value =
+      (0.875 / \(logBase2E)) * -numeric_limits<\(registerName(.S))>::max();
+
+      uint row_base = \(parallelizationGroupOffset) + morton_offset.y + sidx * 8;
+      uint col_base = \(traversalOffset);
+
+      #pragma clang loop unroll(full)
+      for (ushort c = 0; c < \(blockDimensions.traversal); c += 8) {
+        uint current_col = col_base + c;
+        auto S_elements = S_sram[c / 8].thread_elements();
+
+        #pragma clang loop unroll(full)
+        for (ushort index = 0; index < 2; ++index) {
+          uint row_idx = row_base + morton_offset.x + index;
+          uint col_idx = current_col + morton_offset.x + index;
+
+          // Mask if column index is greater than row index (upper triangle)
+          if (col_idx > row_idx) {
+            (*S_elements)[index] = mask_value;
+          }
+        }
+      }
+    }
+
+    """
+  }
+
+  // Apply custom masking (template for user-defined masks).
+  func maskCustom() -> String {
+    let logBase2E: Float = 1.442695041
+    return """
+
+    // Custom masking implementation template
+    // Modify this function to implement your own masking logic
+    {
+      const \(registerName(.S)) mask_value =
+      (0.875 / \(logBase2E)) * -numeric_limits<\(registerName(.S))>::max();
+
+      uint row_base = \(parallelizationGroupOffset) + morton_offset.y + sidx * 8;
+      uint col_base = \(traversalOffset);
+
+      #pragma clang loop unroll(full)
+      for (ushort c = 0; c < \(blockDimensions.traversal); c += 8) {
+        uint current_col = col_base + c;
+        auto S_elements = S_sram[c / 8].thread_elements();
+
+        #pragma clang loop unroll(full)
+        for (ushort index = 0; index < 2; ++index) {
+          uint row_idx = row_base + morton_offset.x + index;
+          uint col_idx = current_col + morton_offset.x + index;
+
+          // Example: mask based on some custom condition
+          // Replace this condition with your own masking logic
+          bool should_mask = false; // Placeholder - modify as needed
+
+          if (should_mask) {
+            (*S_elements)[index] = mask_value;
+          }
+        }
+      }
+    }
+
+    """
+  }
+
+  // Apply causal masking to transposed matrix (lower triangular mask on S^T).
+  func maskCausalTransposed() -> String {
+    let logBase2E: Float = 1.442695041
+    return """
+
+    // Apply causal masking to transposed matrix: mask out entries below the main diagonal
+    {
+      const \(registerName(.S)) mask_value =
+      (0.875 / \(logBase2E)) * -numeric_limits<\(registerName(.S))>::max();
+
+      uint col_base = \(parallelizationGroupOffset) + morton_offset.y + sidx * 8;
+      uint row_base = \(traversalOffset);
+
+      #pragma clang loop unroll(full)
+      for (ushort c = 0; c < \(blockDimensions.traversal); c += 8) {
+        uint current_row = row_base + c;
+        auto S_elements = S_sram[c / 8].thread_elements();
+
+        #pragma clang loop unroll(full)
+        for (ushort index = 0; index < 2; ++index) {
+          uint row_idx = current_row + morton_offset.x + index;
+          uint col_idx = col_base + morton_offset.x + index;
+
+          // Mask if row index is greater than column index (lower triangle in S^T)
+          if (row_idx > col_idx) {
+            (*S_elements)[index] = mask_value;
+          }
+        }
+      }
+    }
+
+    """
+  }
+
+  // Apply custom masking to transposed matrix (template for user-defined masks).
+  func maskCustomTransposed() -> String {
+    let logBase2E: Float = 1.442695041
+    return """
+
+    // Custom masking implementation template for transposed matrix
+    // Modify this function to implement your own transposed masking logic
+    {
+      const \(registerName(.S)) mask_value =
+      (0.875 / \(logBase2E)) * -numeric_limits<\(registerName(.S))>::max();
+
+      uint col_base = \(parallelizationGroupOffset) + morton_offset.y + sidx * 8;
+      uint row_base = \(traversalOffset);
+
+      #pragma clang loop unroll(full)
+      for (ushort c = 0; c < \(blockDimensions.traversal); c += 8) {
+        uint current_row = row_base + c;
+        auto S_elements = S_sram[c / 8].thread_elements();
+
+        #pragma clang loop unroll(full)
+        for (ushort index = 0; index < 2; ++index) {
+          uint row_idx = current_row + morton_offset.x + index;
+          uint col_idx = col_base + morton_offset.x + index;
+
+          // Example: mask based on some custom condition
+          // Replace this condition with your own transposed masking logic
+          bool should_mask = false; // Placeholder - modify as needed
+
+          if (should_mask) {
+            (*S_elements)[index] = mask_value;
+          }
+        }
+      }
+    }
+
+    """
+  }
+
   // Prevent the zero padding from changing the values of 'm' and 'l'.
   func maskAttentionMatrixEdge() -> String {
     let blockDim = blockDimensions.traversal

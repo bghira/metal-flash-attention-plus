@@ -176,6 +176,7 @@ extension AttentionKernel {
     for (uint c = 0; c < C; c += \(blockDimensions.traversal)) {
       // S = Q * K^T
       \(QKT)
+      \(maskAttentionMatrix())
       \(maskAttentionMatrixEdge())
       
       // m = reduce(m)
@@ -224,7 +225,8 @@ extension AttentionKernel {
     for (uint c = 0; c < C; c += \(blockDimensions.traversal)) {
       // S = Q * K^T
       \(QKT)
-      
+      \(maskAttentionMatrix())
+
       // P = softmax(S * scaleFactor)
       \(softmax(derivative: false))
       
@@ -272,7 +274,8 @@ extension AttentionKernel {
     for (uint r = 0; r < R; r += \(blockDimensions.traversal)) {
       // S^T = K * Q^T
       \(KQT)
-      
+      \(maskAttentionMatrixTransposed())
+
       // P^T = exp(S^T - L)
       \(softmax(derivative: false))
       

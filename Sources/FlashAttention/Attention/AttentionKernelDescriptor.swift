@@ -42,8 +42,10 @@ public struct AttentionKernelDescriptor {
   public var transposeState: [AttentionOperand: Bool] = [:]
   
   public var type: AttentionKernelType?
-  
+
+  public var maskType: AttentionMaskType = .none
+
   public init() {
-    
+
   }
 }

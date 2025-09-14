@@ -9,7 +9,7 @@
 
 public struct AttentionKernel {
   var type: AttentionKernelType
-  
+
   // Categorical attributes for each operand.
   var cacheState: [AttentionOperand: Bool]
   var memoryPrecisions: [AttentionOperand: GEMMOperandPrecision]
@@ -17,6 +17,7 @@ public struct AttentionKernel {
   var preferAsyncLoad: Bool
   var registerPrecisions: [AttentionOperand: GEMMOperandPrecision]
   var transposeState: [AttentionOperand: Bool]
+  public var maskType: AttentionMaskType
   
   // Layout of the data in registers and threadgroup memory.
   public var blockDimensions: (
@@ -40,6 +41,7 @@ public struct AttentionKernel {
     self.preferAsyncLoad = preferAsyncLoad
     self.registerPrecisions = descriptor.registerPrecisions
     self.transposeState = descriptor.transposeState
+    self.maskType = descriptor.maskType
     
     self.blockDimensions = blockDimensions
     self.headDimension = headDimension

@@ -7,6 +7,12 @@
 
 import Metal
 
+public enum AttentionMaskType {
+  case none
+  case causal
+  case custom
+}
+
 public struct AttentionDescriptor {
   // Q, K, V, dO
   public var lowPrecisionInputs: Bool = false
@@ -20,9 +26,11 @@ public struct AttentionDescriptor {
   public var matrixDimensions: (row: UInt32, column: UInt32, head: UInt16)?
   
   public var transposeState: (Q: Bool, K: Bool, V: Bool, O: Bool)?
-  
+
+  public var maskType: AttentionMaskType = .none
+
   public init() {
-    
+
   }
 }
 
@@ -125,7 +133,8 @@ extension AttentionDescriptor {
     output.registerPrecisions = registerPrecisions
     output.transposeState = createTransposeState()
     output.type = type
-    
+    output.maskType = maskType
+
     return output
   }
 }

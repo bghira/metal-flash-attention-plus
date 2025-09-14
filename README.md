@@ -6,6 +6,38 @@ This repository ports the official implementation of [FlashAttention](https://gi
 
 Single-headed attention only, to focus on the core bottlenecks of different attention algorithms (register pressure, parallelism). With the basic algorithm done correctly, it should be comparatively trivial to add customizations like block sparsity.
 
+## Masking Support
+
+This implementation now supports attention masking for both causal (autoregressive) and custom masking patterns. The masking is implemented efficiently at the Metal kernel level, applying masks before the softmax operation to prevent unwanted attention connections.
+
+### Supported Masking Types
+
+- **No Masking** (`.none`) - Standard full attention
+- **Causal Masking** (`.causal`) - Lower triangular mask for autoregressive models
+- **Custom Masking** (`.custom`) - Template for user-defined masking patterns
+
+### Usage Example
+
+```swift
+import FlashAttention
+
+// Create descriptor with causal masking
+var descriptor = AttentionDescriptor()
+descriptor.matrixDimensions = (row: 512, column: 512, head: 64)
+descriptor.transposeState = (Q: false, K: false, V: false, O: false)
+descriptor.maskType = .causal  // Enable causal masking
+
+// Create kernels with masking support
+let forwardKernel = AttentionKernel(descriptor: descriptor.kernelDescriptor(type: .forward))
+let backwardQueryKernel = AttentionKernel(descriptor: descriptor.kernelDescriptor(type: .backwardQuery))
+let backwardKVKernel = AttentionKernel(descriptor: descriptor.kernelDescriptor(type: .backwardKeyValue))
+
+// Generate Metal source code with masking
+let metalSource = forwardKernel.createSource()
+```
+
+The masking is applied consistently across all kernel types (forward, backward query, backward key-value) to ensure gradient correctness during training.
+
 Everything is JIT compiled at runtime. This contrasts with the previous implementation, which relied on an executable embedded in Xcode 14.2.
 
 The backward pass uses less memory than [Dao-AILab/flash-attention](https://github.com/Dao-AILab/flash-attention). The official implementation allocates scratch space for atomics and partial sums. Apple hardware lacks native FP32 atomics (`metal::atomic<float>` is emulated). While attempting to circumvent the lack of hardware support, bandwidth and parallelization bottlenecks in the FlashAttention-2 backward kernel were revealed. An alternative backward pass was designed with higher compute cost (7 GEMMs instead of 5 GEMMs). It achieves 100% parallelization efficiency across both the row and column dimensions of the attention matrix. Most importantly, it is easier to code and maintain.
@@ -207,7 +239,7 @@ Alternatively, create a new Xcode project with the SwiftUI template. Override th
 
 Add the `-Xswiftc -Ounchecked` option through <b>Project</b> > your project's name > <b>Build Settings</b> > <b>Swift Compiler - Code Generation</b> > <b>Optimization Level</b>. The second column of the table lists your project's name. Click <b>Other</b> in the dropdown and type `-Ounchecked` in the panel that appears. Next, add this repository as a Swift package dependency. Look through some of the tests under `Tests/FlashAttention`. Copy the raw source code for one of these tests into your project. Invoke the test from the function in the previous paragraph. Examine what it displays on the console.
 
-To modify the Metal code generation (e.g. add multi-head or mask support), copy the raw Swift code into your Xcode project. Either use `git clone` in a separate folder, or download the raw files on GitHub as a ZIP. There is also a way to link to your fork of `metal-flash-attention` and autosave your changes to the cloud, but this is more difficult to set up. Remove the Swift package dependency from the previous paragraph. Re-run the test of your choosing. Does it compile and display something in the console?
+To modify the Metal code generation (e.g. add multi-head support or customize masking patterns), copy the raw Swift code into your Xcode project. Either use `git clone` in a separate folder, or download the raw files on GitHub as a ZIP. There is also a way to link to your fork of `metal-flash-attention` and autosave your changes to the cloud, but this is more difficult to set up. Remove the Swift package dependency from the previous paragraph. Re-run the test of your choosing. Does it compile and display something in the console?
 
 ### Editing Source Code
 
