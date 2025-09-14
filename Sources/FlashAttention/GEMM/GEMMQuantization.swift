@@ -178,7 +178,9 @@ public class QuantizedTensor {
     let bufferSize: Int
 
     if precision.requiresQuantizationParameters {
-      parameters = precision.calculateQuantizationParameters(data: floatData, count: elementCount)
+      parameters = floatData.withUnsafeBufferPointer { buffer in
+        precision.calculateQuantizationParameters(data: buffer.baseAddress!, count: elementCount)
+      }
       bufferSize = precision == .INT4 ? (elementCount + 1) / 2 : elementCount * precision.size
     } else {
       // For non-quantized types (FP32, FP16, BF16), create dummy parameters

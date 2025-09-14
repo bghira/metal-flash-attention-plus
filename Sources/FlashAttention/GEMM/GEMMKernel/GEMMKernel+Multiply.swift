@@ -18,14 +18,41 @@ extension GEMMKernel {
     var quantizedZeroPointA: String?
     var quantizedScaleB: String?
     var quantizedZeroPointB: String?
+
+    // Helper methods to generate load calls
+    func generateLoadCallA(leadingDim: String, origin: String, transpose: String) -> String {
+      guard let loadFunctionA = loadFunctionA else { return "" }
+
+      if isQuantizedA {
+        let scale = quantizedScaleA ?? "1.0f"
+        let zeroPoint = quantizedZeroPointA ?? "0"
+        return
+          "A->\(loadFunctionA)(A_src, \(leadingDim), \(origin), \(scale), \(zeroPoint), \(transpose));"
+      } else {
+        return "A->\(loadFunctionA)(A_src, \(leadingDim), \(origin), \(transpose));"
+      }
+    }
+
+    func generateLoadCallB(leadingDim: String, origin: String, transpose: String) -> String {
+      guard let loadFunctionB = loadFunctionB else { return "" }
+
+      if isQuantizedB {
+        let scale = quantizedScaleB ?? "1.0f"
+        let zeroPoint = quantizedZeroPointB ?? "0"
+        return
+          "B->\(loadFunctionB)(B_src, \(leadingDim), \(origin), \(scale), \(zeroPoint), \(transpose));"
+      } else {
+        return "B->\(loadFunctionB)(B_src, \(leadingDim), \(origin), \(transpose));"
+      }
+    }
   }
 
   func createMultiply(descriptor: MultiplyDescriptor) -> String {
     guard let addressSpace = descriptor.addressSpace,
       let leadingDimensionA = descriptor.leadingDimensionA,
       let leadingDimensionB = descriptor.leadingDimensionB,
-      let loadFunctionA = descriptor.loadFunctionA,
-      let loadFunctionB = descriptor.loadFunctionB
+      descriptor.loadFunctionA != nil,
+      descriptor.loadFunctionB != nil
     else {
       fatalError("Descriptor was incomplete.")
     }
@@ -45,13 +72,13 @@ extension GEMMKernel {
       for (ushort m = 0; m < \(registerM); m += 8) {
         ushort2 origin(0, m);
         auto A = get_sram(A_sram, 8, origin);
-        \(descriptor.isQuantizedA ? "A->\(loadFunctionA)(A_src, \(leadingDimensionA), ushort2(k, m), \(descriptor.quantizedScaleA ?? "1.0f"), \(descriptor.quantizedZeroPointA ?? "0"), A_trans);" : "A->\(loadFunctionA)(A_src, \(leadingDimensionA), ushort2(k, m), A_trans);")
+        \(descriptor.generateLoadCallA(leadingDim: leadingDimensionA, origin: "ushort2(k, m)", transpose: "A_trans"))
       }
       #pragma clang loop unroll(full)
       for (ushort n = 0; n < \(registerN); n += 8) {
         ushort2 origin(n, 0);
         auto B = get_sram(B_sram, \(registerN), origin);
-        \(descriptor.isQuantizedB ? "B->\(loadFunctionB)(B_src, \(leadingDimensionB), ushort2(n, k), \(descriptor.quantizedScaleB ?? "1.0f"), \(descriptor.quantizedZeroPointB ?? "0"), B_trans);" : "B->\(loadFunctionB)(B_src, \(leadingDimensionB), ushort2(n, k), B_trans);")
+        \(descriptor.generateLoadCallB(leadingDim: leadingDimensionB, origin: "ushort2(n, k)", transpose: "B_trans"))
       }
       #pragma clang loop unroll(full)
       for (ushort m = 0; m < \(registerM); m += 8) {

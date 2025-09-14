@@ -60,10 +60,12 @@ final class QuantizedAttentionTest: XCTestCase {
 
     // Test INT8 round-trip
     do {
-      let params = GEMMOperandPrecision.INT8.calculateQuantizationParameters(
-        data: originalData,
-        count: count
-      )
+      let params = originalData.withUnsafeBufferPointer { buffer in
+        GEMMOperandPrecision.INT8.calculateQuantizationParameters(
+          data: buffer.baseAddress!,
+          count: count
+        )
+      }
 
       var quantizedData = [Int8](repeating: 0, count: count)
       var dequantizedData = [Float](repeating: 0, count: count)
@@ -102,10 +104,12 @@ final class QuantizedAttentionTest: XCTestCase {
 
     // Test INT4 round-trip
     do {
-      let params = GEMMOperandPrecision.INT4.calculateQuantizationParameters(
-        data: originalData,
-        count: count
-      )
+      let params = originalData.withUnsafeBufferPointer { buffer in
+        GEMMOperandPrecision.INT4.calculateQuantizationParameters(
+          data: buffer.baseAddress!,
+          count: count
+        )
+      }
 
       let quantizedSize = (count + 1) / 2
       var quantizedData = [UInt8](repeating: 0, count: quantizedSize)

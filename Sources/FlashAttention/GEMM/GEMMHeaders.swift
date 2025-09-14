@@ -692,8 +692,10 @@ func createMetalSimdgroupMatrixStorage() -> String {
           // Calculate address manually for packed INT4 data
           const device uchar *adjusted_src;
           if (transpose_matrix) {
+            // For transpose: swap x/y coordinates in addressing
             adjusted_src = src + ulong((matrix_origin.x / 2) * packed_elements_per_row) + (matrix_origin.y / 2);
           } else {
+            // Normal addressing: row-major order
             adjusted_src = src + ulong((matrix_origin.y / 2) * packed_elements_per_row) + (matrix_origin.x / 2);
           }
 
@@ -725,8 +727,10 @@ func createMetalSimdgroupMatrixStorage() -> String {
           // Calculate address manually for packed INT4 data
           const threadgroup uchar *adjusted_src;
           if (transpose_matrix) {
+            // For transpose: swap x/y coordinates in addressing
             adjusted_src = src + (matrix_origin.x / 2) * packed_elements_per_row + (matrix_origin.y / 2);
           } else {
+            // Normal addressing: row-major order
             adjusted_src = src + (matrix_origin.y / 2) * packed_elements_per_row + (matrix_origin.x / 2);
           }
 
