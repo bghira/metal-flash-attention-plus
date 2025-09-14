@@ -316,8 +316,8 @@ extension QuantizedAttention {
         quantizationConfig: config
       )
 
-      // Warmup
-      for _ in 0..<10 {
+      // Warmup - GPU kernels need extensive warmup to reach peak performance
+      for _ in 0..<50 {
         if let commandBuffer = forward(
           query: tensors.query,
           key: tensors.key,

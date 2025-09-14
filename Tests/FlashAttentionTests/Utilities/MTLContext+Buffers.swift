@@ -98,15 +98,3 @@ extension MTLContext {
     }
   }
 }
-
-extension Int8 {
-  init(clamping value: Int32) {
-    if value < Int32(Int8.min) {
-      self = Int8.min
-    } else if value > Int32(Int8.max) {
-      self = Int8.max
-    } else {
-      self = Int8(value)
-    }
-  }
-}

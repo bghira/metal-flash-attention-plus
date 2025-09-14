@@ -704,8 +704,10 @@ func createMetalSimdgroupMatrixStorage() -> String {
             val1 = int32_t(packed & 0xF) - 8;  // Lower nibble, convert from [0,15] to [-8,7]
             val2 = int32_t(packed >> 4) - 8;   // Upper nibble
           } else {
-            val1 = int32_t(packed >> 4) - 8;   // Upper nibble
-            val2 = (matrix_origin.x + 1 < elements_per_row) ? int32_t(packed & 0xF) - 8 : 0;
+            val1 = int32_t(packed >> 4) - 8;   // Upper nibble from current byte
+            // val2 should come from lower nibble of next byte
+            val2 = (matrix_origin.x + 1 < elements_per_row) ?
+                   int32_t((adjusted_src[1] & 0xF)) - 8 : 0;
           }
 
           T dequant_val1 = (float(val1) - float(zero_point)) * scale;
@@ -735,8 +737,10 @@ func createMetalSimdgroupMatrixStorage() -> String {
             val1 = int32_t(packed & 0xF) - 8;  // Lower nibble, convert from [0,15] to [-8,7]
             val2 = int32_t(packed >> 4) - 8;   // Upper nibble
           } else {
-            val1 = int32_t(packed >> 4) - 8;   // Upper nibble
-            val2 = (matrix_origin.x + 1 < elements_per_row) ? int32_t(packed & 0xF) - 8 : 0;
+            val1 = int32_t(packed >> 4) - 8;   // Upper nibble from current byte
+            // val2 should come from lower nibble of next byte
+            val2 = (matrix_origin.x + 1 < elements_per_row) ?
+                   int32_t((adjusted_src[1] & 0xF)) - 8 : 0;
           }
 
           T dequant_val1 = (float(val1) - float(zero_point)) * scale;

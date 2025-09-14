@@ -90,8 +90,8 @@ extension GEMMOperandPrecision {
         let val2 =
           i + 1 < count ? Int32(round(input[i + 1] / parameters.scale)) + parameters.zeroPoint : 0
 
-        let packed1 = UInt8(clamping: val1 + 8) & 0xF  // Convert from [-8,7] to [0,15]
-        let packed2 = UInt8(clamping: val2 + 8) & 0xF
+        let packed1 = UInt8(max(0, min(15, val1 + 8)))  // Clamp [-8,7] to [0,15] before UInt8 conversion
+        let packed2 = UInt8(max(0, min(15, val2 + 8)))
 
         outputUInt8[i / 2] = (packed2 << 4) | packed1
       }
