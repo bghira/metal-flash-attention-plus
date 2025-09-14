@@ -59,9 +59,7 @@ extension AttentionKernel {
           return """
 
             simdgroup_matrix_storage<\(registerName(.dO))> dO;
-            dO.\(loadFunction(.dO))(
-              dO_src, \(leadingDimension(.dO)),
-              ushort2(d, 0), \(transposed(.dO)));
+            dO.\(loadCall(.dO, src: "dO_src", leadingDim: "\(leadingDimension(.dO))", origin: "ushort2(d, 0)", transpose: "\(transposed(.dO))"));
 
             """
         }
@@ -89,9 +87,7 @@ extension AttentionKernel {
           \(loadDerivativeO())
           
           simdgroup_matrix_storage<\(registerName(.O))> O;
-          O.\(loadFunction(.O))(
-            O_src, \(leadingDimension(.O)),
-            ushort2(d, 0), \(transposed(.O)));
+          O.\(loadCall(.O, src: "O_src", leadingDim: "\(leadingDimension(.O))", origin: "ushort2(d, 0)", transpose: "\(transposed(.O))"));
           
           // Perform the pointwise multiplication.
           auto dO_value = *(dO.thread_elements());
@@ -185,12 +181,8 @@ extension AttentionKernel {
         ushort2 origin(0, 0);
         simdgroup_matrix_storage<\(registerName(.dO))> dO;
         simdgroup_matrix_storage<\(registerName(.O))> O;
-        dO.\(loadFunction(.dO))(
-          dO_block, \(leadingBlockDimension(.dO)),
-          origin, \(transposed(.dO)));
-        O.\(loadFunction(.O))(
-          O_block, \(leadingBlockDimension(.O)),
-          origin, \(transposed(.O)));
+        dO.\(loadCall(.dO, src: "dO_block", leadingDim: "\(leadingBlockDimension(.dO))", origin: "origin", transpose: "\(transposed(.dO))"));
+        O.\(loadCall(.O, src: "O_block", leadingDim: "\(leadingBlockDimension(.O))", origin: "origin", transpose: "\(transposed(.O))"));
 
         // Perform the pointwise multiplication.
         auto dO_value = *(dO.thread_elements());
@@ -544,9 +536,7 @@ extension AttentionKernel {
           for (ushort c = 0; c < \(blockDimensions.traversal); c += 8) {
             ushort2 \(operand)_origin(c, 0);
             simdgroup_matrix_storage<\(registerName(operand))> \(operand);
-            \(operand).\(loadFunction(operand))(
-              \(operand)_src, 1,
-              \(operand)_origin, false);
+            \(operand).\(loadCall(operand, src: "\(operand)_src", leadingDim: "1", origin: "\(operand)_origin", transpose: "false"));
             auto \(operand)_elements = *(\(operand).thread_elements());
             
             \(overwriteAttentionMatrixElements())

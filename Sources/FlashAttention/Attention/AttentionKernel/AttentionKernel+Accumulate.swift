@@ -186,9 +186,7 @@ extension AttentionKernel {
           #pragma clang loop unroll(full)
           for (ushort d = 0; d < \(descriptor.registerSize); d += 8) {
             ushort2 \(C)_origin(d, 0);
-            \(C)_sram[d / 8].\(loadFunction(C))(
-              \(C)_src, \(leadingDimension(C)),
-              \(C)_origin, \(transposed(C)));
+            \(C)_sram[d / 8].\(loadCall(C, src: "\(C)_src", leadingDim: "\(leadingDimension(C))", origin: "\(C)_origin", transpose: "\(transposed(C))"));
           }
 
           """
@@ -201,9 +199,7 @@ extension AttentionKernel {
           #pragma clang loop unroll(full)
           for (ushort d = 0; d < \(descriptor.registerSize); d += 8) {
             ushort2 \(C)_origin(d, 0);
-            \(C)_sram[d / 8].\(loadFunction(C))(
-              \(C)_src, \(leadingBlockDimension(C)), 
-              \(C)_origin, \(transposed(C)));
+            \(C)_sram[d / 8].\(loadCall(C, src: "\(C)_src", leadingDim: "\(leadingBlockDimension(C))", origin: "\(C)_origin", transpose: "\(transposed(C))"));
           }
 
           """
@@ -365,9 +361,7 @@ extension AttentionKernel {
         // Load the RHS from memory.
         ushort2 \(B)_origin(d, c);
         simdgroup_matrix_storage<\(registerName(B))> \(B);
-        \(B).\(loadFunction(B))(
-          \(B)_src, \(leadingDimensionRHS(descriptor)),
-          \(B)_origin, \(transposed(B)));
+        \(B).\(loadCall(B, src: "\(B)_src", leadingDim: "\(leadingDimensionRHS(descriptor))", origin: "\(B)_origin", transpose: "\(transposed(B))"));
         
         // Issue one SIMD matmul instruction.
         \(C)_sram[(\(descriptor.registerOffset) + d) / 8].multiply(

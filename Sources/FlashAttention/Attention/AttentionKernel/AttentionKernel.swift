@@ -109,6 +109,16 @@ extension AttentionKernel {
       fatalError("Invalid precisions.")
     case (.FP32, .FP32):
       return "load"
+
+    case (.INT8, .FP32):
+      return "load_quantized_int8"
+    case (.INT4, .FP32):
+      return "load_quantized_int4"
+
+    case (.INT8, _), (.INT4, _):
+      fatalError("Quantized inputs must use FP32 register precision.")
+    case (_, .INT8), (_, .INT4):
+      fatalError("Register precision cannot be quantized.")
     }
   }
 
@@ -140,6 +150,16 @@ extension AttentionKernel {
       fatalError("Invalid precisions.")
     case (.FP32, .FP32):
       return "store"
+
+    case (.INT8, .FP32):
+      return "store_quantized_int8"
+    case (.INT4, .FP32):
+      return "store_quantized_int4"
+
+    case (.INT8, _), (.INT4, _):
+      fatalError("Quantized outputs must use FP32 register precision.")
+    case (_, .INT8), (_, .INT4):
+      fatalError("Register precision cannot be quantized.")
     }
   }
 
@@ -155,6 +175,28 @@ extension AttentionKernel {
       fatalError("Transpose state of \(operand) was not specified.")
     }
     return output
+  }
+
+  func isQuantized(_ operand: AttentionOperand) -> Bool {
+    guard let memoryPrecision = memoryPrecisions[operand] else {
+      fatalError("Memory precision of \(operand) was not specified.")
+    }
+    return memoryPrecision == .INT8 || memoryPrecision == .INT4
+  }
+
+  func loadCall(
+    _ operand: AttentionOperand, src: String, leadingDim: String, origin: String, transpose: String
+  ) -> String {
+    if isQuantized(operand) {
+      // For quantized operands, we need to include scale and zero_point parameters
+      let operandName = "\(operand)".lowercased()
+      return
+        "\(loadFunction(operand))(\n              \(src), \(leadingDim),\n              \(origin), \(operandName)_scale, \(operandName)_zero_point, \(transpose))"
+    } else {
+      // For non-quantized operands, use the standard parameters
+      return
+        "\(loadFunction(operand))(\n              \(src), \(leadingDim),\n              \(origin), \(transpose))"
+    }
   }
 }
 

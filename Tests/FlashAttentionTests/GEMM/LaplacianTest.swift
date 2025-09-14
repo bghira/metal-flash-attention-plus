@@ -265,6 +265,15 @@ private func profileProblemSize(
             let entry16 = casted[address]
             let entry16x2 = SIMD2<UInt16>(.zero, entry16)
             entry32 = unsafeBitCast(entry16x2, to: Float.self)
+          case .INT8:
+            let casted = raw.assumingMemoryBound(to: Int8.self)
+            entry32 = Float(casted[address])
+          case .INT4:
+            let casted = raw.assumingMemoryBound(to: UInt8.self)
+            let packedByte = casted[address / 2]
+            let isLowNibble = address % 2 == 0
+            let nibble = isLowNibble ? (packedByte & 0xF) : (packedByte >> 4)
+            entry32 = Float(Int32(nibble) - 8)
           }
           C[address] = entry32
         }
@@ -278,6 +287,8 @@ private func profileProblemSize(
     case .FP32: return 1e-5
     case .FP16: return 5e-3
     case .BF16: return 5e-2
+    case .INT8: return 1e-1
+    case .INT4: return 5e-1
     }
   }
   var errorThreshold: Float = 0

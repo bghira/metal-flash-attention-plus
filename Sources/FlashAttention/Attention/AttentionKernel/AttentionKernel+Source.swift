@@ -99,11 +99,32 @@ extension AttentionKernel {
     }
 
     var output: String = ""
+    var currentBufferIndex = 0
+
+    // First pass: regular operand buffers
     for operand in operands {
+      let bufferIndex = operand.bufferBinding!
+      currentBufferIndex = max(currentBufferIndex, Int(bufferIndex) + 1)
+
       var line = "device \(memoryName(operand))* \(operand) "
-      line += "[[buffer(\(operand.bufferBinding!))]],"
+      line += "[[buffer(\(bufferIndex))]],"
       output += "  " + line + "\n"
     }
+
+    // Second pass: quantization parameters for quantized operands
+    for operand in operands where isQuantized(operand) {
+      let operandName = "\(operand)".lowercased()
+
+      // Scale parameter
+      output += "  constant float &\(operandName)_scale [[buffer(\(currentBufferIndex))]], \n"
+      currentBufferIndex += 1
+
+      // Zero point parameter
+      output +=
+        "  constant int32_t &\(operandName)_zero_point [[buffer(\(currentBufferIndex))]], \n"
+      currentBufferIndex += 1
+    }
+
     return output
   }
 }
