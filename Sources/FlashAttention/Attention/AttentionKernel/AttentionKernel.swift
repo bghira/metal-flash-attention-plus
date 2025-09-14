@@ -26,6 +26,9 @@ public struct AttentionKernel {
   var headDimension: UInt16
   public var threadgroupMemoryAllocation: UInt16
 
+  // Scale factor for attention computation
+  var softmaxScale: Float
+
   public init(descriptor: AttentionKernelDescriptor) {
     guard let blockDimensions = descriptor.blockDimensions,
       let headDimension = descriptor.headDimension,
@@ -46,6 +49,14 @@ public struct AttentionKernel {
 
     self.blockDimensions = blockDimensions
     self.headDimension = headDimension
+
+    // Set scale factor with backward compatibility
+    if let customScale = descriptor.softmaxScale {
+      self.softmaxScale = customScale
+    } else {
+      // Default to 1/√head_dim for backward compatibility
+      self.softmaxScale = 1.0 / Float(headDimension).squareRoot()
+    }
 
     // Pick the threadgroup memory allocation size.
     threadgroupMemoryAllocation = .zero

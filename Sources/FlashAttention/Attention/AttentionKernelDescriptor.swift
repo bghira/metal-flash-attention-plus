@@ -19,6 +19,10 @@ public struct AttentionKernelDescriptor {
 
   public var memoryPrecisions: [AttentionOperand: GEMMOperandPrecision] = [:]
 
+  /// Scale factor for attention computation (typically 1/√head_dim).
+  /// If nil, defaults to 1/√head_dim for backward compatibility.
+  public var softmaxScale: Float?
+
   /// Reads with a one-to-one mapping to threads (like GEMM store) and writes.
   public var preferAsyncCache: Bool?
 
