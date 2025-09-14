@@ -34,7 +34,7 @@ public enum GEMMOperandPrecision: UInt16 {
   case FP32 = 0
   case FP16 = 1
   case BF16 = 2
-  
+
   // The MSL keyword corresponding to the precision.
   public var name: String {
     switch self {
@@ -46,7 +46,7 @@ public enum GEMMOperandPrecision: UInt16 {
       return "bfloat"
     }
   }
-  
+
   // The size of a scalar, in bytes.
   public var size: Int {
     switch self {

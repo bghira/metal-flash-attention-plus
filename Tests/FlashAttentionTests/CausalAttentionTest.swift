@@ -1,5 +1,5 @@
-import XCTest
 import FlashAttention
+import XCTest
 
 final class CausalAttentionTest: XCTestCase {
   func testCausalMasking() throws {
@@ -37,10 +37,11 @@ final class CausalAttentionTest: XCTestCase {
     let matrixBytes = sequenceDimension * headDimension * MemoryLayout<Float>.stride
 
     guard let Q = device.makeBuffer(length: matrixBytes),
-          let K = device.makeBuffer(length: matrixBytes),
-          let V = device.makeBuffer(length: matrixBytes),
-          let O = device.makeBuffer(length: matrixBytes),
-          let L = device.makeBuffer(length: sequenceDimension * MemoryLayout<Float>.stride) else {
+      let K = device.makeBuffer(length: matrixBytes),
+      let V = device.makeBuffer(length: matrixBytes),
+      let O = device.makeBuffer(length: matrixBytes),
+      let L = device.makeBuffer(length: sequenceDimension * MemoryLayout<Float>.stride)
+    else {
       XCTFail("Failed to create Metal buffers")
       return
     }
