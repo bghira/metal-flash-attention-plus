@@ -180,7 +180,9 @@ public class QuantizedTensor {
     if precision.requiresQuantizationParameters {
       parameters = floatData.withUnsafeBufferPointer { buffer in
         guard let baseAddress = buffer.baseAddress else {
-          fatalError("Failed to obtain base address from floatData buffer for quantization parameter calculation.")
+          fatalError(
+            "Failed to obtain base address from floatData buffer for quantization parameter calculation."
+          )
         }
         return precision.calculateQuantizationParameters(data: baseAddress, count: elementCount)
       }

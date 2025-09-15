@@ -31,6 +31,10 @@ public struct AttentionDescriptor {
   // Sparsity pattern for attention matrix
   public var sparsityPattern: SparsityPattern = .none
 
+  /// Scale factor for attention computation (typically 1/√head_dim).
+  /// If nil, defaults to 1/√head_dim for backward compatibility.
+  public var softmaxScale: Float?
+
   public init() {
 
   }
@@ -137,6 +141,7 @@ extension AttentionDescriptor {
     output.registerPrecisions = registerPrecisions
     output.transposeState = createTransposeState()
     output.type = type
+    output.softmaxScale = softmaxScale
 
     return output
   }

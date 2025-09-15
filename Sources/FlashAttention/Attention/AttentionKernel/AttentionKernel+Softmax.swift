@@ -16,12 +16,11 @@ extension AttentionKernel {
   // - derivative: Whether this is the derivative softmax.
   func dotProductScale(derivative: Bool) -> Float {
     let logBase2E: Float = 1.442695041
-    let rsqrtD = 1 / Float(headDimension).squareRoot()
 
     if !derivative {
-      return logBase2E * rsqrtD
+      return logBase2E * softmaxScale
     } else {
-      return rsqrtD
+      return softmaxScale
     }
   }
 }
