@@ -43,31 +43,44 @@ public class QuantizedAttention {
 
     /// Generate kernel descriptor with quantized precision handling
     public func kernelDescriptor(type: AttentionKernelType) -> AttentionKernelDescriptor {
+      print("DEBUG: Creating quantized kernel descriptor for type: \(type)")
+
       var descriptor = baseDescriptor.kernelDescriptor(type: type)
+
+      print("DEBUG: Base descriptor memory precisions - Q: \(descriptor.memoryPrecisions[.Q] ?? .FP16), K: \(descriptor.memoryPrecisions[.K] ?? .FP16), V: \(descriptor.memoryPrecisions[.V] ?? .FP16)")
+      print("DEBUG: Base descriptor register precisions - Q: \(descriptor.registerPrecisions[.Q] ?? .FP16), K: \(descriptor.registerPrecisions[.K] ?? .FP16), V: \(descriptor.registerPrecisions[.V] ?? .FP16)")
 
       // Override memory precisions with quantized settings
       descriptor.memoryPrecisions[.Q] = quantizationConfig.queryPrecision
       descriptor.memoryPrecisions[.K] = quantizationConfig.keyPrecision
       descriptor.memoryPrecisions[.V] = quantizationConfig.valuePrecision
 
+      print("DEBUG: Quantized memory precisions - Q: \(quantizationConfig.queryPrecision), K: \(quantizationConfig.keyPrecision), V: \(quantizationConfig.valuePrecision)")
+
       // Set register precisions to FP32 for quantized inputs
       if quantizationConfig.queryPrecision.requiresQuantizationParameters {
         descriptor.registerPrecisions[.Q] = .FP32
+        print("DEBUG: Set Q register precision to FP32")
       }
       if quantizationConfig.keyPrecision.requiresQuantizationParameters {
         descriptor.registerPrecisions[.K] = .FP32
+        print("DEBUG: Set K register precision to FP32")
       }
       if quantizationConfig.valuePrecision.requiresQuantizationParameters {
         descriptor.registerPrecisions[.V] = .FP32
+        print("DEBUG: Set V register precision to FP32")
       }
+
+      print("DEBUG: Final register precisions - Q: \(descriptor.registerPrecisions[.Q] ?? .FP16), K: \(descriptor.registerPrecisions[.K] ?? .FP16), V: \(descriptor.registerPrecisions[.V] ?? .FP16)")
 
       return descriptor
     }
   }
 
   private let device: MTLDevice
-  private let commandQueue: MTLCommandQueue
+  private let commandQueue: MTLCommandQueue?  // Make optional to handle cleanup safely
   private var pipelineCache: [String: MTLComputePipelineState] = [:]
+  private var isDisposed: Bool = false  // Track disposal state
 
   public init(device: MTLDevice) {
     self.device = device
@@ -75,6 +88,28 @@ public class QuantizedAttention {
       fatalError("Could not create Metal command queue")
     }
     commandQueue = queue
+  }
+
+  /// Safe disposal method to prevent crashes during Swift ARC cleanup
+  private func dispose() {
+    guard !isDisposed else { return }
+
+    print("DEBUG: QuantizedAttention.dispose() called")
+
+    // Clear pipeline cache safely
+    pipelineCache.removeAll()
+
+    // Mark as disposed to prevent double-cleanup
+    isDisposed = true
+
+    print("DEBUG: QuantizedAttention.dispose() completed")
+  }
+
+  /// Swift deinitializer with defensive guards
+  deinit {
+    print("DEBUG: QuantizedAttention.deinit called")
+    dispose()
+    print("DEBUG: QuantizedAttention.deinit completed")
   }
 
   /// Perform quantized attention forward pass
@@ -94,19 +129,33 @@ public class QuantizedAttention {
   )
     -> MTLCommandBuffer?
   {
-    guard let commandBuffer = commandQueue.makeCommandBuffer() else {
-      print("Error: Failed to create command buffer")
+    print("DEBUG: QuantizedAttention.forward() called")
+
+    guard !isDisposed, let queue = commandQueue,
+          let commandBuffer = queue.makeCommandBuffer() else {
+      print("Error: Failed to create command buffer (disposed: \(isDisposed))")
       return nil
     }
 
-    let kernelDescriptor = descriptor.kernelDescriptor(type: .forward)
+    print("DEBUG: About to create kernel descriptor")
+    print("DEBUG: descriptor type: \(type(of: descriptor))")
+    print("DEBUG: descriptor is QuantizedAttentionDescriptor: \(descriptor is QuantizedAttentionDescriptor)")
+    let kernelDescriptor = descriptor.kernelDescriptor(type: AttentionKernelType.forward)
+    print("DEBUG: Created kernel descriptor")
+
+    print("DEBUG: About to create AttentionKernel")
     let kernel = AttentionKernel(descriptor: kernelDescriptor)
+    print("DEBUG: Created AttentionKernel")
 
     // Create pipeline state for quantized attention
+    print("DEBUG: About to create pipeline state")
+    print("DEBUG: Cache has \(pipelineCache.count) entries")
     guard let pipelineState = getOrCreatePipelineState(for: kernel, descriptor: descriptor) else {
       print("Error: Failed to create pipeline state")
       return nil
     }
+    print("DEBUG: Created pipeline state")
+    print("DEBUG: Cache now has \(pipelineCache.count) entries")
 
     guard let encoder = commandBuffer.makeComputeCommandEncoder() else {
       return nil
@@ -114,11 +163,19 @@ public class QuantizedAttention {
 
     encoder.setComputePipelineState(pipelineState)
 
+    // Set threadgroup memory length (required for flash attention kernels)
+    let threadgroupMemoryLength = Int(kernel.threadgroupMemoryAllocation)
+    encoder.setThreadgroupMemoryLength(threadgroupMemoryLength, index: 0)
+    print("DEBUG: Set threadgroup memory length: \(threadgroupMemoryLength)")
+
     // Set tensor buffers
     encoder.setBuffer(query.data, offset: 0, index: 0)
     encoder.setBuffer(key.data, offset: 0, index: 1)
     encoder.setBuffer(value.data, offset: 0, index: 2)
     encoder.setBuffer(output, offset: 0, index: 3)
+
+    print("DEBUG: Buffer sizes - Q: \(query.data.length), K: \(key.data.length), V: \(value.data.length), Out: \(output.length)")
+    print("DEBUG: Buffer addresses - Q: \(query.data.contents()), K: \(key.data.contents()), V: \(value.data.contents()), Out: \(output.contents())")
 
     // Set quantization parameters
     var bufferIndex = 4
@@ -126,25 +183,34 @@ public class QuantizedAttention {
     if query.parameters.precision.requiresQuantizationParameters {
       var qScale = query.parameters.scale
       var qZeroPoint = query.parameters.zeroPoint
+      print("DEBUG: Setting Q quantization - scale: \(qScale), zeroPoint: \(qZeroPoint), precision: \(query.parameters.precision)")
       encoder.setBytes(&qScale, length: MemoryLayout<Float>.size, index: bufferIndex)
       encoder.setBytes(&qZeroPoint, length: MemoryLayout<Int32>.size, index: bufferIndex + 1)
       bufferIndex += 2
+    } else {
+      print("DEBUG: Q not quantized - precision: \(query.parameters.precision)")
     }
 
     if key.parameters.precision.requiresQuantizationParameters {
       var kScale = key.parameters.scale
       var kZeroPoint = key.parameters.zeroPoint
+      print("DEBUG: Setting K quantization - scale: \(kScale), zeroPoint: \(kZeroPoint), precision: \(key.parameters.precision)")
       encoder.setBytes(&kScale, length: MemoryLayout<Float>.size, index: bufferIndex)
       encoder.setBytes(&kZeroPoint, length: MemoryLayout<Int32>.size, index: bufferIndex + 1)
       bufferIndex += 2
+    } else {
+      print("DEBUG: K not quantized - precision: \(key.parameters.precision)")
     }
 
     if value.parameters.precision.requiresQuantizationParameters {
       var vScale = value.parameters.scale
       var vZeroPoint = value.parameters.zeroPoint
+      print("DEBUG: Setting V quantization - scale: \(vScale), zeroPoint: \(vZeroPoint), precision: \(value.parameters.precision)")
       encoder.setBytes(&vScale, length: MemoryLayout<Float>.size, index: bufferIndex)
       encoder.setBytes(&vZeroPoint, length: MemoryLayout<Int32>.size, index: bufferIndex + 1)
       bufferIndex += 2
+    } else {
+      print("DEBUG: V not quantized - precision: \(value.parameters.precision)")
     }
 
     // Set matrix dimensions
@@ -157,13 +223,18 @@ public class QuantizedAttention {
     encoder.setBytes(&N, length: MemoryLayout<UInt32>.size, index: bufferIndex + 1)
     encoder.setBytes(&K, length: MemoryLayout<UInt32>.size, index: bufferIndex + 2)
 
-    // Calculate optimal thread group size for GPU matrix operations
-    let threadgroupSize = MTLSize(width: 8, height: 8, depth: 1) // GPU-friendly tile size
-    let gridSize = MTLSize(
-      width: (Int(N) + threadgroupSize.width - 1) / threadgroupSize.width,
-      height: (Int(M) + threadgroupSize.height - 1) / threadgroupSize.height,
-      depth: 1
-    )
+    // Use proper threadgroup configuration from AttentionKernel
+    let kernelThreadgroupSize = Int(kernel.threadgroupSize)
+    let blockParallelization = Int(kernel.blockDimensions.parallelization)
+
+    print("DEBUG: Using threadgroupSize=\(kernelThreadgroupSize), parallelization=\(blockParallelization)")
+
+    // Flash attention kernel expects specific dispatch configuration
+    let threadgroupSize = MTLSize(width: kernelThreadgroupSize, height: 1, depth: 1)
+    let numThreadgroups = (blockParallelization + Int(kernel.blockDimensions.parallelization) - 1) / Int(kernel.blockDimensions.parallelization)
+    let gridSize = MTLSize(width: numThreadgroups, height: 1, depth: 1)
+
+    print("DEBUG: Dispatching with gridSize=\(gridSize), threadgroupSize=\(threadgroupSize)")
 
     encoder.dispatchThreadgroups(gridSize, threadsPerThreadgroup: threadgroupSize)
     encoder.endEncoding()
@@ -176,8 +247,25 @@ public class QuantizedAttention {
   )
     -> MTLComputePipelineState?
   {
+    print("DEBUG: getOrCreatePipelineState() called")
     let source = kernel.createSource()
+    print("DEBUG: Generated Metal kernel source (first 200 chars):")
+    print(String(source.prefix(200)))
+    print("DEBUG: Source length: \(source.count) characters")
+
+    // Write full source to temporary file for debugging
+    let sourceURL = URL(fileURLWithPath: "/tmp/quantized_kernel_debug.metal")
+    do {
+      try source.write(to: sourceURL, atomically: true, encoding: .utf8)
+      print("DEBUG: Full kernel source written to /tmp/quantized_kernel_debug.metal")
+    } catch {
+      print("DEBUG: Failed to write kernel source: \(error)")
+    }
     let cacheKey = String(source.hashValue)
+
+    // Clear cache to force regeneration for debugging
+    print("DEBUG: Clearing pipeline cache to force regeneration")
+    pipelineCache.removeAll()
 
     if let cached = pipelineCache[cacheKey] {
       return cached
@@ -188,6 +276,9 @@ public class QuantizedAttention {
 
       let functionConstants = MTLFunctionConstantValues()
       descriptor.baseDescriptor.setFunctionConstants(functionConstants)
+
+      // DEBUG: Check function constants after setting
+      print("DEBUG: Function constants set for quantized attention")
 
       let function = try library.makeFunction(name: "attention", constantValues: functionConstants)
       let pipelineState = try device.makeComputePipelineState(function: function)
@@ -392,8 +483,9 @@ extension QuantizedAttention {
   )
     -> MTLCommandBuffer?
   {
-    guard let commandBuffer = commandQueue.makeCommandBuffer() else {
-      print("Error: Failed to create command buffer for backward query")
+    guard !isDisposed, let queue = commandQueue,
+          let commandBuffer = queue.makeCommandBuffer() else {
+      print("Error: Failed to create command buffer for backward query (disposed: \(isDisposed))")
       return nil
     }
 
@@ -478,8 +570,9 @@ extension QuantizedAttention {
   )
     -> MTLCommandBuffer?
   {
-    guard let commandBuffer = commandQueue.makeCommandBuffer() else {
-      print("Error: Failed to create command buffer for backward key-value")
+    guard !isDisposed, let queue = commandQueue,
+          let commandBuffer = queue.makeCommandBuffer() else {
+      print("Error: Failed to create command buffer for backward key-value (disposed: \(isDisposed))")
       return nil
     }
 

@@ -7,8 +7,11 @@
 
 // Top level specification of the code structure.
 
+import Foundation
+
 public extension AttentionKernel {
   func createSource() -> String {
+    print("DEBUG: AttentionKernel.createSource() called for type: \(type)")
     func createLoop() -> String {
       switch type {
       case .forward:
@@ -20,7 +23,7 @@ public extension AttentionKernel {
       }
     }
 
-    return """
+    let source = """
 
     \(createMetalSimdgroupEvent())
     \(createMetalSimdgroupMatrixStorage())
@@ -52,6 +55,17 @@ public extension AttentionKernel {
     }
 
     """
+
+    // Force write source to file for debugging
+    let sourceURL = URL(fileURLWithPath: "/tmp/quantized_attention_kernel.metal")
+    do {
+      try source.write(to: sourceURL, atomically: true, encoding: .utf8)
+      print("DEBUG: Kernel source written to /tmp/quantized_attention_kernel.metal")
+    } catch {
+      print("DEBUG: Failed to write kernel source: \(error)")
+    }
+
+    return source
   }
 }
 

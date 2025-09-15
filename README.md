@@ -10,7 +10,7 @@ Single-headed attention only, to focus on the core bottlenecks of different atte
 
 Following the [GLUON](https://github.com/triton-lang/triton/blob/main/python/examples/gluon/01-attention-forward.py) example from the Triton project, mutliple optimisations have been implemented with adjustments for the Metal hardware API.
 
-The details of our improvements can be found [here](/docs/GLUON_OPTIMIZATIONS_SUMMARY.md) with a [full correctness report](/docs/CORRECTNESS_ANALYSIS.md).
+The details of our improvements can be found [on the dedicated GLUON page](/docs/GLUON_OPTIMIZATIONS_SUMMARY.md) with a [full correctness report](/docs/CORRECTNESS_ANALYSIS.md).
 
 ## Masking Support
 
