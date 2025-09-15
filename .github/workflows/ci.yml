@@ -100,7 +100,7 @@ jobs:
         run: swift build -c ${{ matrix.configuration }}
 
       - name: Run Swift Tests
-        run: swift test -c ${{ matrix.configuration }} --parallel
+        run: swift test -c ${{ matrix.configuration }}
 
       - name: Generate test coverage (release only)
         if: matrix.configuration == 'release'
