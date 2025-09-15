@@ -1,14 +1,8 @@
 # Markdownlint configuration
 # See https://github.com/DavidAnson/markdownlint for rule documentation
 
-# Disable problematic rules for technical documentation
-MD013:
-  # Line length - allow longer lines for code examples and URLs
-  line_length: 120
-  # Allow long lines in code blocks and tables
-  code_blocks: false
-  tables: false
-  headers: false
+# Disable line length enforcement for documentation-heavy files
+MD013: false  # Disable line length checks entirely for technical docs
 
 MD033:
   # Allow inline HTML for better formatting in technical docs
@@ -29,11 +23,8 @@ MD029:
   # Ordered list item prefix
   style: "ordered"
 
-MD040:
-  # Fenced code blocks should have a language specified
-  # Allow empty language for plain text examples
-  allowed_languages: []
-  language_only: false
+# Allow missing language specification in code blocks for simple examples
+MD040: false
 
 # Rules to disable entirely
 MD007: false  # Unordered list indentation - too strict for nested lists

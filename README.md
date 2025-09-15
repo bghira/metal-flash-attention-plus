@@ -16,7 +16,7 @@ This implementation now supports attention masking for both causal (autoregressi
 - **Causal Masking** (`.causal`) - Lower triangular mask for autoregressive models
 - **Custom Masking** (`.custom`) - Template for user-defined masking patterns
 
-### Usage Example
+## Usage
 
 ```swift
 import FlashAttention
@@ -361,9 +361,7 @@ Quantized training enables:
 - **Mixed precision training** with configurable precision per tensor type
 - **Quantization-aware fine-tuning** with straight-through gradient estimation
 
-## Usage
-
-### Setting Up Workflow
+## Installation
 
 On macOS, download the Swift package and compile with `-Xswiftc -Ounchecked`. This compiler option is needed for performance-sensitive CPU code. Release mode cannot be used because it forces the entire codebase to be recompiled from scratch, every time there is a single change. Navigate to the Git repo in Finder and double-click `Package.swift`. An Xcode window should pop up. On the left, there should be a hierarchy of files. If you cannot unravel the hierarchy, something went wrong.
 
