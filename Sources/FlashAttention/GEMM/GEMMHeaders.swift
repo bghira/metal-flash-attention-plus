@@ -521,7 +521,7 @@ func createMetalSimdgroupMatrixStorage() -> String {
 
     // Determine the lines of the 'else' block.
     if decodingBF16 {
-      var blockContents: [String] = if action == .load {
+      let blockContents: [String] = if action == .load {
         createOnePartAccess()
       } else {
         createTwoPartAccess(transposed: false)

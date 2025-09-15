@@ -174,7 +174,7 @@ extension GEMMKernel {
 
 extension GEMMKernel {
   func createMultiplyIterations() -> String {
-    var asyncIterationsStart = if preferAsyncLoad {
+    let asyncIterationsStart = if preferAsyncLoad {
       "0"
     } else {
       "(K - (K % K_group))"

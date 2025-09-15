@@ -12,7 +12,7 @@ import Metal
 extension AttentionDescriptor {
   func parameterFile(type: AttentionKernelType) -> String {
     // Choose a function pointer for the parameters.
-    var createParameters: (MTLDevice) -> String = if lowPrecisionInputs, lowPrecisionIntermediates {
+    let createParameters: (MTLDevice) -> String = if lowPrecisionInputs, lowPrecisionIntermediates {
       switch type {
       case .forward:
         Self.forwardMixed(device:)

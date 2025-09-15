@@ -57,7 +57,7 @@ extension GEMMKernel {
   }
 
   func createLoadC() -> String {
-    var loadFunctionC = if
+    let loadFunctionC = if
       memoryPrecisions.C == .BF16,
       registerPrecisions.C == .FP32
     {
@@ -126,7 +126,7 @@ extension GEMMKernel {
   }
 
   func createStoreC() -> String {
-    var storeFunctionC = if
+    let storeFunctionC = if
       memoryPrecisions.C == .BF16,
       registerPrecisions.C == .FP32
     {

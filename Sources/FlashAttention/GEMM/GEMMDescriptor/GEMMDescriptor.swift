@@ -360,7 +360,7 @@ extension GEMMDescriptor {
     )
       -> UInt32
     {
-      var expectedLeading: UInt32 = if transposeState {
+      let expectedLeading: UInt32 = if transposeState {
         untransposedRows
       } else {
         untransposedColumns
