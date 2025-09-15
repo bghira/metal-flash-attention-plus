@@ -6,9 +6,15 @@ This repository ports the official implementation of [FlashAttention](https://gi
 
 Single-headed attention only, to focus on the core bottlenecks of different attention algorithms (register pressure, parallelism). With the basic algorithm done correctly, it should be comparatively trivial to add customizations like block sparsity.
 
+## GLUON Optimisations
+
+Following the [GLUON](https://github.com/triton-lang/triton/blob/main/python/examples/gluon/01-attention-forward.py) example from the Triton project, mutliple optimisations have been implemented with adjustments for the Metal hardware API.
+
+The details of our improvements can be found [here](/docs/GLUON_OPTIMIZATIONS_SUMMARY.md) with a [full correctness report](/docs/CORRECTNESS_ANALYSIS.md).
+
 ## Masking Support
 
-This implementation now supports attention masking for both causal (autoregressive) and custom masking patterns. The masking is implemented efficiently at the Metal kernel level, applying masks before the softmax operation to prevent unwanted attention connections.
+This implementation now supports attention masking for both causal (autoregressive) and custom masking patterns. The masking is implemented efficiently at the Metal kernel level, applying masks before the softmax operation to prevent unwanted attention connections. The backend automatically selects whether to vectorise the mask depending on the shape.
 
 ### Supported Masking Types
 

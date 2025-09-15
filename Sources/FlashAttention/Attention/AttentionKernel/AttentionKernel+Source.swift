@@ -212,7 +212,7 @@ extension AttentionKernel {
       \(onlineCorrectO())
 
       // P = softmax(S * scaleFactor)
-      \(softmax(derivative: false))
+      \(optimizedSoftmax(derivative: false))
 
       // l = reduce(l)
       \(onlineReduceSum())
@@ -254,13 +254,13 @@ extension AttentionKernel {
       \(maskSparsityPattern())
 
       // P = softmax(S * scaleFactor)
-      \(softmax(derivative: false))
+      \(optimizedSoftmax(derivative: false))
 
       // dP = dO * V^T
       \(dOVT)
 
       // dS = P * (dP - D) * scaleFactor
-      \(softmax(derivative: true))
+      \(optimizedSoftmax(derivative: true))
 
       // dQ += dS * K
       \(dSK)
@@ -303,7 +303,7 @@ extension AttentionKernel {
       \(maskSparsityPatternTransposed())
 
       // P^T = exp(S^T - L)
-      \(softmax(derivative: false))
+      \(optimizedSoftmax(derivative: false))
 
       // dV += P^T * dO
       \(PTdO)
@@ -312,7 +312,7 @@ extension AttentionKernel {
       \(VdOT)
 
       // dS^T = P^T * (dP^T - D) * scaleFactor
-      \(softmax(derivative: true))
+      \(optimizedSoftmax(derivative: true))
 
       // dK += dS^T * Q
       \(dSTQ)
