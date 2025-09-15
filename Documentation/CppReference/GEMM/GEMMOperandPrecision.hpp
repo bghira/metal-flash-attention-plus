@@ -40,7 +40,7 @@ public:
     FP16 = 1,
     BF16 = 2,
   };
-  
+
   GEMMOperandPrecision() = default;
   constexpr GEMMOperandPrecision(Value aPrecision) : value(aPrecision) { }
 
@@ -61,7 +61,7 @@ public:
         return "bfloat";
     }
   }
-  
+
   // The size of the scalar, in bytes.
   int64_t size() {
     switch (value) {
@@ -73,7 +73,7 @@ public:
         return 2;
     }
   }
-  
+
   Value value;
 };
 

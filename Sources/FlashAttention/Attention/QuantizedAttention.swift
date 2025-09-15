@@ -8,7 +8,6 @@ import Metal
 
 /// Quantized Flash Attention implementation with GPU acceleration
 public class QuantizedAttention {
-
   /// Quantized attention configuration
   public struct Configuration {
     /// Precision for Query tensor
@@ -75,7 +74,7 @@ public class QuantizedAttention {
     guard let queue = device.makeCommandQueue() else {
       fatalError("Could not create Metal command queue")
     }
-    self.commandQueue = queue
+    commandQueue = queue
   }
 
   /// Perform quantized attention forward pass
@@ -92,8 +91,9 @@ public class QuantizedAttention {
     value: QuantizedTensor,
     output: MTLBuffer,
     descriptor: QuantizedAttentionDescriptor
-  ) -> MTLCommandBuffer? {
-
+  )
+    -> MTLCommandBuffer?
+  {
     guard let commandBuffer = commandQueue.makeCommandBuffer() else {
       print("Error: Failed to create command buffer")
       return nil
@@ -158,7 +158,7 @@ public class QuantizedAttention {
     encoder.setBytes(&K, length: MemoryLayout<UInt32>.size, index: bufferIndex + 2)
 
     // Calculate optimal thread group size for GPU matrix operations
-    let threadgroupSize = MTLSize(width: 8, height: 8, depth: 1)  // GPU-friendly tile size
+    let threadgroupSize = MTLSize(width: 8, height: 8, depth: 1) // GPU-friendly tile size
     let gridSize = MTLSize(
       width: (Int(N) + threadgroupSize.width - 1) / threadgroupSize.width,
       height: (Int(M) + threadgroupSize.height - 1) / threadgroupSize.height,
@@ -173,7 +173,9 @@ public class QuantizedAttention {
 
   private func getOrCreatePipelineState(
     for kernel: AttentionKernel, descriptor: QuantizedAttentionDescriptor
-  ) -> MTLComputePipelineState? {
+  )
+    -> MTLComputePipelineState?
+  {
     let source = kernel.createSource()
     let cacheKey = String(source.hashValue)
 
@@ -201,8 +203,7 @@ public class QuantizedAttention {
 
 // MARK: - Convenience extensions
 
-extension QuantizedAttention {
-
+public extension QuantizedAttention {
   /// Create quantized tensors from floating point arrays
   /// - Parameters:
   ///   - queryData: Query data as Float array
@@ -213,12 +214,13 @@ extension QuantizedAttention {
   ///   - valueShape: Shape of value tensor
   ///   - config: Quantization configuration
   /// - Returns: Tuple of quantized tensors
-  public func createQuantizedTensors(
+  func createQuantizedTensors(
     queryData: [Float], keyData: [Float], valueData: [Float],
     queryShape: [Int], keyShape: [Int], valueShape: [Int],
     config: Configuration
-  ) -> (query: QuantizedTensor, key: QuantizedTensor, value: QuantizedTensor) {
-
+  )
+    -> (query: QuantizedTensor, key: QuantizedTensor, value: QuantizedTensor)
+  {
     let query = QuantizedTensor.from(
       device: device,
       floatData: queryData,
@@ -250,13 +252,14 @@ extension QuantizedAttention {
   ///   - headDim: Head dimension
   ///   - iterations: Number of benchmark iterations
   /// - Returns: Dictionary with benchmark results
-  public func benchmark(
+  func benchmark(
     batchSize: Int = 1,
     sequenceLength: Int = 1024,
     headDim: Int = 64,
     iterations: Int = 100
-  ) -> [String: Double] {
-
+  )
+    -> [String: Double]
+  {
     let totalElements = batchSize * sequenceLength * headDim
 
     // Generate random test data
@@ -318,13 +321,15 @@ extension QuantizedAttention {
 
       // Warmup - GPU kernels need extensive warmup to reach peak performance
       for _ in 0..<50 {
-        if let commandBuffer = forward(
-          query: tensors.query,
-          key: tensors.key,
-          value: tensors.value,
-          output: outputBuffer,
-          descriptor: descriptor
-        ) {
+        if
+          let commandBuffer = forward(
+            query: tensors.query,
+            key: tensors.key,
+            value: tensors.value,
+            output: outputBuffer,
+            descriptor: descriptor
+          )
+        {
           commandBuffer.commit()
           commandBuffer.waitUntilCompleted()
         }
@@ -333,13 +338,15 @@ extension QuantizedAttention {
       // Benchmark
       let startTime = CFAbsoluteTimeGetCurrent()
       for _ in 0..<iterations {
-        if let commandBuffer = forward(
-          query: tensors.query,
-          key: tensors.key,
-          value: tensors.value,
-          output: outputBuffer,
-          descriptor: descriptor
-        ) {
+        if
+          let commandBuffer = forward(
+            query: tensors.query,
+            key: tensors.key,
+            value: tensors.value,
+            output: outputBuffer,
+            descriptor: descriptor
+          )
+        {
           commandBuffer.commit()
           commandBuffer.waitUntilCompleted()
         }
@@ -362,7 +369,6 @@ extension QuantizedAttention {
 // MARK: - Quantized Backward Pass Implementation
 
 extension QuantizedAttention {
-
   /// Perform quantized attention backward pass for query gradients
   /// - Parameters:
   ///   - query: Quantized query tensor (INT8)
@@ -383,8 +389,9 @@ extension QuantizedAttention {
     gradQuery: MTLBuffer,
     dValues: MTLBuffer,
     descriptor: QuantizedAttentionDescriptor
-  ) -> MTLCommandBuffer? {
-
+  )
+    -> MTLCommandBuffer?
+  {
     guard let commandBuffer = commandQueue.makeCommandBuffer() else {
       print("Error: Failed to create command buffer for backward query")
       return nil
@@ -395,7 +402,8 @@ extension QuantizedAttention {
 
     guard
       let pipelineState = createQuantizedBackwardPipeline(
-        source: source, functionName: "quantized_backward_query")
+        source: source, functionName: "quantized_backward_query"
+      )
     else {
       print("Error: Failed to create pipeline state for backward query")
       return nil
@@ -408,13 +416,13 @@ extension QuantizedAttention {
     encoder.setComputePipelineState(pipelineState)
 
     // Set buffers
-    encoder.setBuffer(query.data, offset: 0, index: 0)  // Q_quantized
-    encoder.setBuffer(key.data, offset: 0, index: 1)  // K
-    encoder.setBuffer(value.data, offset: 0, index: 2)  // V
-    encoder.setBuffer(gradOutput, offset: 0, index: 3)  // dO
-    encoder.setBuffer(logsumexp, offset: 0, index: 4)  // L
-    encoder.setBuffer(gradQuery, offset: 0, index: 5)  // dQ
-    encoder.setBuffer(dValues, offset: 0, index: 6)  // D
+    encoder.setBuffer(query.data, offset: 0, index: 0) // Q_quantized
+    encoder.setBuffer(key.data, offset: 0, index: 1) // K
+    encoder.setBuffer(value.data, offset: 0, index: 2) // V
+    encoder.setBuffer(gradOutput, offset: 0, index: 3) // dO
+    encoder.setBuffer(logsumexp, offset: 0, index: 4) // L
+    encoder.setBuffer(gradQuery, offset: 0, index: 5) // dQ
+    encoder.setBuffer(dValues, offset: 0, index: 6) // D
 
     // Set quantization parameters
     var qScale = query.parameters.scale
@@ -467,8 +475,9 @@ extension QuantizedAttention {
     gradKey: MTLBuffer,
     gradValue: MTLBuffer,
     descriptor: QuantizedAttentionDescriptor
-  ) -> MTLCommandBuffer? {
-
+  )
+    -> MTLCommandBuffer?
+  {
     guard let commandBuffer = commandQueue.makeCommandBuffer() else {
       print("Error: Failed to create command buffer for backward key-value")
       return nil
@@ -479,7 +488,8 @@ extension QuantizedAttention {
 
     guard
       let pipelineState = createQuantizedBackwardPipeline(
-        source: source, functionName: "quantized_backward_key_value")
+        source: source, functionName: "quantized_backward_key_value"
+      )
     else {
       print("Error: Failed to create pipeline state for backward key-value")
       return nil
@@ -492,14 +502,14 @@ extension QuantizedAttention {
     encoder.setComputePipelineState(pipelineState)
 
     // Set buffers
-    encoder.setBuffer(query.data, offset: 0, index: 0)  // Q_quantized
-    encoder.setBuffer(key.data, offset: 0, index: 1)  // K_quantized
-    encoder.setBuffer(value.data, offset: 0, index: 2)  // V_quantized
-    encoder.setBuffer(gradOutput, offset: 0, index: 3)  // dO
-    encoder.setBuffer(logsumexp, offset: 0, index: 4)  // L
-    encoder.setBuffer(dValues, offset: 0, index: 5)  // D
-    encoder.setBuffer(gradKey, offset: 0, index: 6)  // dK
-    encoder.setBuffer(gradValue, offset: 0, index: 7)  // dV
+    encoder.setBuffer(query.data, offset: 0, index: 0) // Q_quantized
+    encoder.setBuffer(key.data, offset: 0, index: 1) // K_quantized
+    encoder.setBuffer(value.data, offset: 0, index: 2) // V_quantized
+    encoder.setBuffer(gradOutput, offset: 0, index: 3) // dO
+    encoder.setBuffer(logsumexp, offset: 0, index: 4) // L
+    encoder.setBuffer(dValues, offset: 0, index: 5) // D
+    encoder.setBuffer(gradKey, offset: 0, index: 6) // dK
+    encoder.setBuffer(gradValue, offset: 0, index: 7) // dV
 
     // Set quantization parameters for Q, K, V
     var qScale = query.parameters.scale
@@ -566,169 +576,169 @@ extension QuantizedAttention {
     }
   }
 
-  private func generateQuantizedBackwardQueryKernel(descriptor: QuantizedAttentionDescriptor)
+  private func generateQuantizedBackwardQueryKernel(descriptor _: QuantizedAttentionDescriptor)
     -> String
   {
-    return """
-      #include <metal_stdlib>
-      using namespace metal;
+    """
+    #include <metal_stdlib>
+    using namespace metal;
 
-      // Vectorized dequantization helper
-      METAL_FUNC float4 dequantize_char4(char4 quantized, float scale, int32_t zero_point) {
-          int4 int_vals = int4(quantized);
-          return (float4(int_vals) - float(zero_point)) * scale;
-      }
+    // Vectorized dequantization helper
+    METAL_FUNC float4 dequantize_char4(char4 quantized, float scale, int32_t zero_point) {
+        int4 int_vals = int4(quantized);
+        return (float4(int_vals) - float(zero_point)) * scale;
+    }
 
-      // Quantized backward pass: compute dQ
-      kernel void quantized_backward_query(
-          device const char *Q_quantized [[buffer(0)]],      // INT8 quantized query
-          device const half *K [[buffer(1)]],                // FP16 key
-          device const half *V [[buffer(2)]],                // FP16 value
-          device const float *dO [[buffer(3)]],              // FP32 output gradients
-          device const float *L [[buffer(4)]],               // FP32 logsumexp from forward
-          device float *dQ [[buffer(5)]],                    // FP32 query gradients
-          device float *D [[buffer(6)]],                     // FP32 intermediate D values
-          constant float &q_scale [[buffer(7)]],
-          constant int32_t &q_zero_point [[buffer(8)]],
-          constant uint3 &dims [[buffer(9)]],                // {M, N, K}
-          constant float &ste_clip_range [[buffer(10)]],
-          uint2 gid [[thread_position_in_grid]]
-      ) {
-          uint M = dims.x, N = dims.y, K = dims.z;
-          uint row = gid.y, col = gid.x;
+    // Quantized backward pass: compute dQ
+    kernel void quantized_backward_query(
+        device const char *Q_quantized [[buffer(0)]],      // INT8 quantized query
+        device const half *K [[buffer(1)]],                // FP16 key
+        device const half *V [[buffer(2)]],                // FP16 value
+        device const float *dO [[buffer(3)]],              // FP32 output gradients
+        device const float *L [[buffer(4)]],               // FP32 logsumexp from forward
+        device float *dQ [[buffer(5)]],                    // FP32 query gradients
+        device float *D [[buffer(6)]],                     // FP32 intermediate D values
+        constant float &q_scale [[buffer(7)]],
+        constant int32_t &q_zero_point [[buffer(8)]],
+        constant uint3 &dims [[buffer(9)]],                // {M, N, K}
+        constant float &ste_clip_range [[buffer(10)]],
+        uint2 gid [[thread_position_in_grid]]
+    ) {
+        uint M = dims.x, N = dims.y, K = dims.z;
+        uint row = gid.y, col = gid.x;
 
-          if (row >= M || col >= K) return;
+        if (row >= M || col >= K) return;
 
-          // Dequantize current query element
-          uint q_idx = row * K + col;
-          char q_quantized = Q_quantized[q_idx];
-          float q_dequantized = (float(q_quantized) - float(q_zero_point)) * q_scale;
+        // Dequantize current query element
+        uint q_idx = row * K + col;
+        char q_quantized = Q_quantized[q_idx];
+        float q_dequantized = (float(q_quantized) - float(q_zero_point)) * q_scale;
 
-          // Clipped straight-through estimator
-          float ste_gradient = 1.0f;
-          if (abs(q_dequantized) > ste_clip_range) {
-              ste_gradient = 0.0f;  // Zero gradient outside quantization range
-          }
+        // Clipped straight-through estimator
+        float ste_gradient = 1.0f;
+        if (abs(q_dequantized) > ste_clip_range) {
+            ste_gradient = 0.0f;  // Zero gradient outside quantization range
+        }
 
-          // Compute D value (rowsum of dO * O) - simplified for prototype
-          if (col == 0) {
-              float d_val = 0.0f;
-              for (uint k = 0; k < K; k++) {
-                  d_val += dO[row * K + k];  // Simplified: assume O ≈ 1 for prototype
-              }
-              D[row] = d_val;
-          }
+        // Compute D value (rowsum of dO * O) - simplified for prototype
+        if (col == 0) {
+            float d_val = 0.0f;
+            for (uint k = 0; k < K; k++) {
+                d_val += dO[row * K + k];  // Simplified: assume O ≈ 1 for prototype
+            }
+            D[row] = d_val;
+        }
 
-          // Attention backward computation: dQ = (P - diag(D)) * K
-          float dq_accumulator = 0.0f;
+        // Attention backward computation: dQ = (P - diag(D)) * K
+        float dq_accumulator = 0.0f;
 
-          for (uint n = 0; n < N; n++) {
-              // Compute QK^T dot product
-              float qk_dot = 0.0f;
-              for (uint k = 0; k < K; k++) {
-                  float q_val = (float(Q_quantized[row * K + k]) - float(q_zero_point)) * q_scale;
-                  qk_dot += q_val * float(K[n * K + k]);
-              }
+        for (uint n = 0; n < N; n++) {
+            // Compute QK^T dot product
+            float qk_dot = 0.0f;
+            for (uint k = 0; k < K; k++) {
+                float q_val = (float(Q_quantized[row * K + k]) - float(q_zero_point)) * q_scale;
+                qk_dot += q_val * float(K[n * K + k]);
+            }
 
-              // Compute attention weight P[row, n]
-              float p_val = exp(qk_dot - L[row]);
+            // Compute attention weight P[row, n]
+            float p_val = exp(qk_dot - L[row]);
 
-              // Apply diagonal correction for gradient computation
-              if (row == n) {
-                  p_val -= D[row];
-              }
+            // Apply diagonal correction for gradient computation
+            if (row == n) {
+                p_val -= D[row];
+            }
 
-              // Accumulate gradient: dQ += (P - diag(D)) * K
-              dq_accumulator += p_val * float(K[n * K + col]);
-          }
+            // Accumulate gradient: dQ += (P - diag(D)) * K
+            dq_accumulator += p_val * float(K[n * K + col]);
+        }
 
-          // Apply straight-through estimator and store
-          dQ[row * K + col] = dq_accumulator * ste_gradient;
-      }
-      """
+        // Apply straight-through estimator and store
+        dQ[row * K + col] = dq_accumulator * ste_gradient;
+    }
+    """
   }
 
-  private func generateQuantizedBackwardKeyValueKernel(descriptor: QuantizedAttentionDescriptor)
+  private func generateQuantizedBackwardKeyValueKernel(descriptor _: QuantizedAttentionDescriptor)
     -> String
   {
-    return """
-      #include <metal_stdlib>
-      using namespace metal;
+    """
+    #include <metal_stdlib>
+    using namespace metal;
 
-      // Vectorized dequantization helper
-      METAL_FUNC float4 dequantize_char4(char4 quantized, float scale, int32_t zero_point) {
-          int4 int_vals = int4(quantized);
-          return (float4(int_vals) - float(zero_point)) * scale;
-      }
+    // Vectorized dequantization helper
+    METAL_FUNC float4 dequantize_char4(char4 quantized, float scale, int32_t zero_point) {
+        int4 int_vals = int4(quantized);
+        return (float4(int_vals) - float(zero_point)) * scale;
+    }
 
-      // Quantized backward pass: compute dK and dV
-      kernel void quantized_backward_key_value(
-          device const char *Q_quantized [[buffer(0)]],      // INT8 quantized query
-          device const char *K_quantized [[buffer(1)]],      // INT8 quantized key
-          device const char *V_quantized [[buffer(2)]],      // INT8 quantized value
-          device const float *dO [[buffer(3)]],              // FP32 output gradients
-          device const float *L [[buffer(4)]],               // FP32 logsumexp from forward
-          device const float *D [[buffer(5)]],               // FP32 D values from backward_query
-          device float *dK [[buffer(6)]],                    // FP32 key gradients
-          device float *dV [[buffer(7)]],                    // FP32 value gradients
-          constant float &q_scale [[buffer(8)]],
-          constant int32_t &q_zero_point [[buffer(9)]],
-          constant float &k_scale [[buffer(10)]],
-          constant int32_t &k_zero_point [[buffer(11)]],
-          constant float &v_scale [[buffer(12)]],
-          constant int32_t &v_zero_point [[buffer(13)]],
-          constant uint3 &dims [[buffer(14)]],               // {M, N, K}
-          constant float &ste_clip_range [[buffer(15)]],
-          uint2 gid [[thread_position_in_grid]]
-      ) {
-          uint M = dims.x, N = dims.y, K = dims.z;
-          uint row = gid.y, col = gid.x;
+    // Quantized backward pass: compute dK and dV
+    kernel void quantized_backward_key_value(
+        device const char *Q_quantized [[buffer(0)]],      // INT8 quantized query
+        device const char *K_quantized [[buffer(1)]],      // INT8 quantized key
+        device const char *V_quantized [[buffer(2)]],      // INT8 quantized value
+        device const float *dO [[buffer(3)]],              // FP32 output gradients
+        device const float *L [[buffer(4)]],               // FP32 logsumexp from forward
+        device const float *D [[buffer(5)]],               // FP32 D values from backward_query
+        device float *dK [[buffer(6)]],                    // FP32 key gradients
+        device float *dV [[buffer(7)]],                    // FP32 value gradients
+        constant float &q_scale [[buffer(8)]],
+        constant int32_t &q_zero_point [[buffer(9)]],
+        constant float &k_scale [[buffer(10)]],
+        constant int32_t &k_zero_point [[buffer(11)]],
+        constant float &v_scale [[buffer(12)]],
+        constant int32_t &v_zero_point [[buffer(13)]],
+        constant uint3 &dims [[buffer(14)]],               // {M, N, K}
+        constant float &ste_clip_range [[buffer(15)]],
+        uint2 gid [[thread_position_in_grid]]
+    ) {
+        uint M = dims.x, N = dims.y, K = dims.z;
+        uint row = gid.y, col = gid.x;
 
-          if (row >= N || col >= K) return;
+        if (row >= N || col >= K) return;
 
-          // Dequantize current K and V elements
-          char k_quantized = K_quantized[row * K + col];
-          char v_quantized = V_quantized[row * K + col];
+        // Dequantize current K and V elements
+        char k_quantized = K_quantized[row * K + col];
+        char v_quantized = V_quantized[row * K + col];
 
-          float k_dequantized = (float(k_quantized) - float(k_zero_point)) * k_scale;
-          float v_dequantized = (float(v_quantized) - float(v_zero_point)) * v_scale;
+        float k_dequantized = (float(k_quantized) - float(k_zero_point)) * k_scale;
+        float v_dequantized = (float(v_quantized) - float(v_zero_point)) * v_scale;
 
-          // Clipped straight-through estimators
-          float k_ste = (abs(k_dequantized) <= ste_clip_range) ? 1.0f : 0.0f;
-          float v_ste = (abs(v_dequantized) <= ste_clip_range) ? 1.0f : 0.0f;
+        // Clipped straight-through estimators
+        float k_ste = (abs(k_dequantized) <= ste_clip_range) ? 1.0f : 0.0f;
+        float v_ste = (abs(v_dequantized) <= ste_clip_range) ? 1.0f : 0.0f;
 
-          // Compute dK and dV
-          float dk_accumulator = 0.0f;
-          float dv_accumulator = 0.0f;
+        // Compute dK and dV
+        float dk_accumulator = 0.0f;
+        float dv_accumulator = 0.0f;
 
-          for (uint m = 0; m < M; m++) {
-              // Compute QK^T dot product for attention weight
-              float qk_dot = 0.0f;
-              for (uint k = 0; k < K; k++) {
-                  float q_k = (float(Q_quantized[m * K + k]) - float(q_zero_point)) * q_scale;
-                  float k_k = (float(K_quantized[row * K + k]) - float(k_zero_point)) * k_scale;
-                  qk_dot += q_k * k_k;
-              }
+        for (uint m = 0; m < M; m++) {
+            // Compute QK^T dot product for attention weight
+            float qk_dot = 0.0f;
+            for (uint k = 0; k < K; k++) {
+                float q_k = (float(Q_quantized[m * K + k]) - float(q_zero_point)) * q_scale;
+                float k_k = (float(K_quantized[row * K + k]) - float(k_zero_point)) * k_scale;
+                qk_dot += q_k * k_k;
+            }
 
-              // Compute attention weight P[m, row]
-              float p_val = exp(qk_dot - L[m]);
+            // Compute attention weight P[m, row]
+            float p_val = exp(qk_dot - L[m]);
 
-              // dK computation: Q^T * (P * dO - diag(D) * dO)
-              float q_val = (float(Q_quantized[m * K + col]) - float(q_zero_point)) * q_scale;
-              float p_do_correction = p_val * dO[m * K + col];
-              if (m == row) { // Diagonal term
-                  p_do_correction -= D[m] * dO[m * K + col];
-              }
-              dk_accumulator += q_val * p_do_correction;
+            // dK computation: Q^T * (P * dO - diag(D) * dO)
+            float q_val = (float(Q_quantized[m * K + col]) - float(q_zero_point)) * q_scale;
+            float p_do_correction = p_val * dO[m * K + col];
+            if (m == row) { // Diagonal term
+                p_do_correction -= D[m] * dO[m * K + col];
+            }
+            dk_accumulator += q_val * p_do_correction;
 
-              // dV computation: P^T * dO
-              dv_accumulator += p_val * dO[m * K + col];
-          }
+            // dV computation: P^T * dO
+            dv_accumulator += p_val * dO[m * K + col];
+        }
 
-          // Apply straight-through estimators and store
-          dK[row * K + col] = dk_accumulator * k_ste;
-          dV[row * K + col] = dv_accumulator * v_ste;
-      }
-      """
+        // Apply straight-through estimators and store
+        dK[row * K + col] = dk_accumulator * k_ste;
+        dV[row * K + col] = dv_accumulator * v_ste;
+    }
+    """
   }
 }

@@ -16,7 +16,7 @@ This implementation now supports attention masking for both causal (autoregressi
 - **Causal Masking** (`.causal`) - Lower triangular mask for autoregressive models
 - **Custom Masking** (`.custom`) - Template for user-defined masking patterns
 
-### Usage Example
+## Usage
 
 ```swift
 import FlashAttention
@@ -40,9 +40,20 @@ The masking is applied consistently across all kernel types (forward, backward q
 
 Everything is JIT compiled at runtime. This contrasts with the previous implementation, which relied on an executable embedded in Xcode 14.2.
 
-The backward pass uses less memory than [Dao-AILab/flash-attention](https://github.com/Dao-AILab/flash-attention). The official implementation allocates scratch space for atomics and partial sums. Apple hardware lacks native FP32 atomics (`metal::atomic<float>` is emulated). While attempting to circumvent the lack of hardware support, bandwidth and parallelization bottlenecks in the FlashAttention-2 backward kernel were revealed. An alternative backward pass was designed with higher compute cost (7 GEMMs instead of 5 GEMMs). It achieves 100% parallelization efficiency across both the row and column dimensions of the attention matrix. Most importantly, it is easier to code and maintain.
+The backward pass uses less memory than [Dao-AILab/flash-attention](https://github.com/Dao-AILab/flash-attention).
+The official implementation allocates scratch space for atomics and partial sums. Apple hardware lacks native FP32
+atomics (`metal::atomic<float>` is emulated). While attempting to circumvent the lack of hardware support, bandwidth
+and parallelization bottlenecks in the FlashAttention-2 backward kernel were revealed. An alternative backward pass
+was designed with higher compute cost (7 GEMMs instead of 5 GEMMs). It achieves 100% parallelization efficiency
+across both the row and column dimensions of the attention matrix. Most importantly, it is easier to code and maintain.
 
-A lot of crazy stuff was done to overcome register pressure bottlenecks. At large head dimensions (e.g. 256), none of the matrix blocks can fit into registers. Not even the accumulator can. Therefore, intentional register spilling is done, but in a more optimized way. A third block dimension was added to the attention algorithm, which blocks along `D`. The aspect ratio of attention matrix blocks was warped heavily, to minimize the bandwidth cost of register spilling. For example, 16-32 along the parallelization dimension and 80-128 along the traversal dimension. There is a large parameter file that takes the `D` dimension, and determines which operands can fit into registers. It then assigns a block size that balances many competing bottlenecks.
+A lot of crazy stuff was done to overcome register pressure bottlenecks. At large head dimensions (e.g. 256), none
+of the matrix blocks can fit into registers. Not even the accumulator can. Therefore, intentional register spilling
+is done, but in a more optimized way. A third block dimension was added to the attention algorithm, which blocks
+along `D`. The aspect ratio of attention matrix blocks was warped heavily, to minimize the bandwidth cost of register
+spilling. For example, 16-32 along the parallelization dimension and 80-128 along the traversal dimension. There is a
+large parameter file that takes the `D` dimension, and determines which operands can fit into registers. It then
+assigns a block size that balances many competing bottlenecks.
 
 The end result is a consistent 4400 gigainstructions per second on M1 Max (83% ALU utilization), at infinite sequence length and infinite head dimension. Provided BF16 emulation is being used for mixed precision (Metal's `bfloat` has IEEE-compliant rounding, a major overhead on older chips without hardware BF16).
 
@@ -50,7 +61,7 @@ The end result is a consistent 4400 gigainstructions per second on M1 Max (83% A
 
 ![M4_Image.png](./Documentation/M4_Image.png)
 
-Raw Data: https://docs.google.com/spreadsheets/d/1Xf4jrJ7e19I32J1IWIekGE9uMFTeZKoOpQ6hlUoh-xY/edit?usp=sharing
+Raw Data: <https://docs.google.com/spreadsheets/d/1Xf4jrJ7e19I32J1IWIekGE9uMFTeZKoOpQ6hlUoh-xY/edit?usp=sharing>
 
 ## Quantifying Performance
 
@@ -66,7 +77,7 @@ Instead of gigaflops, I use gigainstructions to understand how well the shader i
 | Forward Attention | `(2D + 5) * N^2` |
 | Backward Naive Attention | `4D * N^2` |
 | Backward FlashAttention | `(5D + 5) * N^2` |
-| FWD + BWD Combined | `(7D + 10) * N^2` | 
+| FWD + BWD Combined | `(7D + 10) * N^2` |
 
 Due to the complexity of FP32 atomics, MFA used a different approach for backward pass. This one has higher compute cost. It splits the backward pass into two separate kernels: `dQ` and `dK/dV`. A dropdown shows the pseudocode. Compare this to one of the algorithms in the Flash1, Flash2, or Flash3 papers.
 
@@ -75,7 +86,7 @@ Due to the complexity of FP32 atomics, MFA used a different approach for backwar
 | Forward | `(2D + 5) * N^2` |
 | Backward dQ | `(3D + 5) * N^2` |
 | Backward dK/dV | `(4D + 5) * N^2` |
-| FWD + BWD Combined | `(9D + 15) * N^2` | 
+| FWD + BWD Combined | `(9D + 15) * N^2` |
 
 <details>
 <summary>Algorithm Pseudocode</summary>
@@ -133,7 +144,7 @@ Due to the complexity of FP32 atomics, MFA used a different approach for backwar
 
 </details>
 
-Performance is measured by calculating the amount of compute work, then dividing by seconds. The end result is "gigainstructions per second". Next, we need a roofline model. The table below shows rooflines for GINSTRS, calculated as half of GFLOPS. ALU utilization is (actual gigainstructions per second) / (expected gigainstructions per second). For example, M1 Max typically achieves 80% ALU utilization with mixed precision. 
+Performance is measured by calculating the amount of compute work, then dividing by seconds. The end result is "gigainstructions per second". Next, we need a roofline model. The table below shows rooflines for GINSTRS, calculated as half of GFLOPS. ALU utilization is (actual gigainstructions per second) / (expected gigainstructions per second). For example, M1 Max typically achieves 80% ALU utilization with mixed precision.
 
 There are limits to this model. It breaks down with the M3 generation at small head dimensions. Different compute units might be utilized simultaneously, making the apparent utilization over 100%. For the most part, the benchmark provides an accurate model of how much performance is left on the table.
 
@@ -250,6 +261,7 @@ Matrix size: 1024x1024x1024 (Apple M3 Max)
 ```
 
 **Key Technical Improvements:**
+
 - **Vectorized memory access** using `char4` instead of individual byte loads
 - **Hardware memory coalescing** for optimal GPU bandwidth utilization
 - **Direct dequantization** without intermediate type casting overhead
@@ -272,6 +284,7 @@ let result = quantizedAttention.forward(query: tensors.query,
 ```
 
 This quantization approach is particularly effective for:
+
 - **Inference workloads** where memory bandwidth is the bottleneck
 - **Long sequence models** (up to 8x more sequences fit in memory)
 - **Mobile deployment** on resource-constrained Apple devices
@@ -328,26 +341,27 @@ let backwardKVBuffer = quantizedAttention.backwardKeyValue(
 ```
 
 **Performance Results:**
+
 - **1.14-1.48x faster** than FP16 backward passes (measured on Apple M3 Max)
 - **25-40% memory savings** for training workloads
 - **FP32 gradient precision** maintained for numerical stability
 - **Clipped straight-through estimator** for quantization-aware training
 
 **Technical Features:**
+
 - **INT8 quantized weights/activations** with automatic scale/zero-point computation
 - **Vectorized dequantization** using `char4` loads for optimal GPU bandwidth
 - **Gradient clipping** within quantization ranges to maintain training stability
 - **Pipeline caching** for efficient kernel reuse across training steps
 
 Quantized training enables:
+
 - **Larger models** to fit in memory during training
 - **Faster training iterations** with hardware-optimized gradient computation
 - **Mixed precision training** with configurable precision per tensor type
 - **Quantization-aware fine-tuning** with straight-through gradient estimation
 
-## Usage
-
-### Setting Up Workflow
+## Installation
 
 On macOS, download the Swift package and compile with `-Xswiftc -Ounchecked`. This compiler option is needed for performance-sensitive CPU code. Release mode cannot be used because it forces the entire codebase to be recompiled from scratch, every time there is a single change. Navigate to the Git repo in Finder and double-click `Package.swift`. An Xcode window should pop up. On the left, there should be a hierarchy of files. If you cannot unravel the hierarchy, something went wrong.
 

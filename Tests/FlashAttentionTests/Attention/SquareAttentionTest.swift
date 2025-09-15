@@ -146,7 +146,7 @@ final class SquareAttentionTest: XCTestCase {
       AttentionKernelType.backwardKeyValue,
     ]
 
-    var outputString: String = ""
+    var outputString = ""
     print()
     print("Attention Performance Data:")
 
@@ -166,7 +166,8 @@ final class SquareAttentionTest: XCTestCase {
         let metric = profileProblemSize(
           sequenceDimension: 1024,
           headDimension: D,
-          benchmarkedKernel: kernel)
+          benchmarkedKernel: kernel
+        )
         outputString += "\(metric), "
         print(metric, terminator: ", ")
       }
@@ -250,14 +251,16 @@ private func validateProblemSize(
     let functionConstants = MTLFunctionConstantValues()
     attentionDesc.setFunctionConstants(functionConstants)
     let function = try! library.makeFunction(
-      name: "attention", constantValues: functionConstants)
+      name: "attention", constantValues: functionConstants
+    )
 
     // A critical part of the heuristic: force the occupancy to 1024 on M1.
     let pipelineDesc = MTLComputePipelineDescriptor()
     pipelineDesc.computeFunction = function
     pipelineDesc.maxTotalThreadsPerThreadgroup = 1024
     return try! device.makeComputePipelineState(
-      descriptor: pipelineDesc, options: [], reflection: nil)
+      descriptor: pipelineDesc, options: [], reflection: nil
+    )
   }
   let pipelineForward = createPipeline(kernel: kernelForward)
   let pipelineBackwardQuery = createPipeline(kernel: kernelBackwardQuery)
@@ -269,7 +272,9 @@ private func validateProblemSize(
   func createBuffer(
     _ array: [Float],
     _ operand: AttentionOperand
-  ) -> MTLBuffer {
+  )
+    -> MTLBuffer
+  {
     let memoryPrecisions = attentionDesc.memoryPrecisions
     guard let precision = memoryPrecisions[operand] else {
       fatalError("Precision of operand \(operand) was not specified.")
@@ -307,7 +312,9 @@ private func validateProblemSize(
   @discardableResult
   func executeCommandBuffer(
     dispatchCount: Int
-  ) -> Double {
+  )
+    -> Double
+  {
     let commandQueue = MTLContext.global.commandQueue
     let commandBuffer = commandQueue.makeCommandBuffer()!
     let encoder = commandBuffer.makeComputeCommandEncoder()!
@@ -324,20 +331,25 @@ private func validateProblemSize(
     ) {
       encoder.setComputePipelineState(pipeline)
       encoder.setThreadgroupMemoryLength(
-        Int(kernel.threadgroupMemoryAllocation), index: 0)
+        Int(kernel.threadgroupMemoryAllocation), index: 0
+      )
 
       let blockCount = ceilDivide(
-        parallelizationDimension, kernel.blockDimensions.parallelization)
+        parallelizationDimension, kernel.blockDimensions.parallelization
+      )
       let gridSize = MTLSize(
         width: blockCount,
         height: 1,
-        depth: 1)
+        depth: 1
+      )
       let groupSize = MTLSize(
         width: Int(kernel.threadgroupSize),
         height: 1,
-        depth: 1)
+        depth: 1
+      )
       encoder.dispatchThreadgroups(
-        gridSize, threadsPerThreadgroup: groupSize)
+        gridSize, threadsPerThreadgroup: groupSize
+      )
     }
 
     encoder.setBuffer(bufferQ, offset: 0, index: 0)
@@ -357,15 +369,18 @@ private func validateProblemSize(
       dispatch(
         kernel: kernelForward,
         pipeline: pipelineForward,
-        along: sequenceDimension)
+        along: sequenceDimension
+      )
       dispatch(
         kernel: kernelBackwardQuery,
         pipeline: pipelineBackwardQuery,
-        along: sequenceDimension)
+        along: sequenceDimension
+      )
       dispatch(
         kernel: kernelBackwardKeyValue,
         pipeline: pipelineBackwardKeyValue,
-        along: sequenceDimension)
+        along: sequenceDimension
+      )
     }
 
     encoder.endEncoding()
@@ -520,7 +535,8 @@ private func validateProblemSize(
       let error = (expected[i] - actual[i]).magnitude
       if error > tolerance || error.isNaN {
         // Don't report errors in this case.
-        if expected[i].isNaN || expected[i].isInfinite,
+        if
+          expected[i].isNaN || expected[i].isInfinite,
           actual[i].isNaN || actual[i].isInfinite
         {
           continue
@@ -560,7 +576,9 @@ private func profileProblemSize(
   sequenceDimension: Int,
   headDimension: Int,
   benchmarkedKernel: AttentionKernelType = .forward
-) -> Int {
+)
+  -> Int
+{
   var networkDesc = NetworkDescriptor()
   networkDesc.rowDimension = sequenceDimension
   networkDesc.columnDimension = sequenceDimension
@@ -596,14 +614,16 @@ private func profileProblemSize(
     let functionConstants = MTLFunctionConstantValues()
     attentionDesc.setFunctionConstants(functionConstants)
     let function = try! library.makeFunction(
-      name: "attention", constantValues: functionConstants)
+      name: "attention", constantValues: functionConstants
+    )
 
     // A critical part of the heuristic: force the occupancy to 1024 on M1.
     let pipelineDesc = MTLComputePipelineDescriptor()
     pipelineDesc.computeFunction = function
     pipelineDesc.maxTotalThreadsPerThreadgroup = 1024
     return try! device.makeComputePipelineState(
-      descriptor: pipelineDesc, options: [], reflection: nil)
+      descriptor: pipelineDesc, options: [], reflection: nil
+    )
   }
   let pipelineForward = createPipeline(kernel: kernelForward)
   let pipelineBackwardQuery = createPipeline(kernel: kernelBackwardQuery)
@@ -615,7 +635,9 @@ private func profileProblemSize(
   func createBuffer(
     _ array: [Float],
     _ operand: AttentionOperand
-  ) -> MTLBuffer {
+  )
+    -> MTLBuffer
+  {
     let memoryPrecisions = attentionDesc.memoryPrecisions
     guard let precision = memoryPrecisions[operand] else {
       fatalError("Precision of operand \(operand) was not specified.")
@@ -653,7 +675,9 @@ private func profileProblemSize(
   @discardableResult
   func executeCommandBuffer(
     dispatchCount: Int
-  ) -> Double {
+  )
+    -> Double
+  {
     let commandQueue = MTLContext.global.commandQueue
     let commandBuffer = commandQueue.makeCommandBuffer()!
     let encoder = commandBuffer.makeComputeCommandEncoder()!
@@ -670,20 +694,25 @@ private func profileProblemSize(
     ) {
       encoder.setComputePipelineState(pipeline)
       encoder.setThreadgroupMemoryLength(
-        Int(kernel.threadgroupMemoryAllocation), index: 0)
+        Int(kernel.threadgroupMemoryAllocation), index: 0
+      )
 
       let blockCount = ceilDivide(
-        parallelizationDimension, kernel.blockDimensions.parallelization)
+        parallelizationDimension, kernel.blockDimensions.parallelization
+      )
       let gridSize = MTLSize(
         width: blockCount,
         height: 1,
-        depth: 1)
+        depth: 1
+      )
       let groupSize = MTLSize(
         width: Int(kernel.threadgroupSize),
         height: 1,
-        depth: 1)
+        depth: 1
+      )
       encoder.dispatchThreadgroups(
-        gridSize, threadsPerThreadgroup: groupSize)
+        gridSize, threadsPerThreadgroup: groupSize
+      )
     }
 
     encoder.setBuffer(bufferQ, offset: 0, index: 0)
@@ -705,17 +734,20 @@ private func profileProblemSize(
         dispatch(
           kernel: kernelForward,
           pipeline: pipelineForward,
-          along: sequenceDimension)
+          along: sequenceDimension
+        )
       case .backwardQuery:
         dispatch(
           kernel: kernelBackwardQuery,
           pipeline: pipelineBackwardQuery,
-          along: sequenceDimension)
+          along: sequenceDimension
+        )
       case .backwardKeyValue:
         dispatch(
           kernel: kernelBackwardKeyValue,
           pipeline: pipelineBackwardKeyValue,
-          along: sequenceDimension)
+          along: sequenceDimension
+        )
       }
     }
 
@@ -735,20 +767,19 @@ private func profileProblemSize(
   // Benchmark performance.
   var maxGINSTRS: Int = .zero
   for _ in 0..<5 {
-    let dispatchCount: Int = 5
+    let dispatchCount = 5
     let latencySeconds = executeCommandBuffer(dispatchCount: dispatchCount)
 
     // Determine the amount of work done.
     //
     // WARNING: Change this code to match the kernel you're profiling.
-    var operations: Int
-    switch benchmarkedKernel {
+    var operations = switch benchmarkedKernel {
     case .forward:
-      operations = 2 * headDimension + 5
+      2 * headDimension + 5
     case .backwardQuery:
-      operations = 3 * headDimension + 5
+      3 * headDimension + 5
     case .backwardKeyValue:
-      operations = 4 * headDimension + 5
+      4 * headDimension + 5
     }
     operations *= (sequenceDimension * sequenceDimension)
     operations *= dispatchCount

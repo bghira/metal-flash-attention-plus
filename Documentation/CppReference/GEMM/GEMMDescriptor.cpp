@@ -7,7 +7,7 @@ GEMMKey::GEMMKey(GEMMDescriptor descriptor) {
   batchDimension = descriptor.batchDimension;
   matrixDimensions = descriptor.matrixDimensions.value_or
   (simd::uint3(UINT32_MAX));
-  
+
   if (descriptor.memoryPrecisions.has_value()) {
     auto precisions = descriptor.memoryPrecisions.value();
     memoryPrecisions = simd::ushort3 {

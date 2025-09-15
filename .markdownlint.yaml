@@ -1,0 +1,31 @@
+# Markdownlint configuration
+# See https://github.com/DavidAnson/markdownlint for rule documentation
+
+# Disable line length enforcement for documentation-heavy files
+MD013: false  # Disable line length checks entirely for technical docs
+
+MD033:
+  # Allow inline HTML for better formatting in technical docs
+  allowed_elements: ['br', 'sub', 'sup', 'b', 'i', 'details', 'summary']
+
+MD041:
+  # First line in file should be a top-level header
+  # Disable for files that start with front matter or code
+  front_matter_title: ""
+
+# Customize other rules
+MD024:
+  # Multiple headers with the same content
+  # Allow duplicate headers in different sections
+  siblings_only: true
+
+MD029:
+  # Ordered list item prefix
+  style: "ordered"
+
+# Allow missing language specification in code blocks for simple examples
+MD040: false
+
+# Rules to disable entirely
+MD007: false  # Unordered list indentation - too strict for nested lists
+MD012: false  # Multiple consecutive blank lines - allow for readability

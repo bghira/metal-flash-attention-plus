@@ -35,25 +35,26 @@ public struct AttentionDescriptor {
   /// If nil, defaults to 1/√head_dim for backward compatibility.
   public var softmaxScale: Float?
 
-  public init() {
-
-  }
+  public init() {}
 }
 
-extension AttentionDescriptor {
+public extension AttentionDescriptor {
   /// Initialize the kernel descriptor using another descriptor, which just
   /// specifies the problem size. Then, forget the information about problem
   /// size.
-  public func kernelDescriptor(
+  func kernelDescriptor(
     type: AttentionKernelType
-  ) -> AttentionKernelDescriptor {
+  )
+    -> AttentionKernelDescriptor
+  {
     // Fetch the kernel-specific parameters.
     let file = parameterFile(type: type)
     let table = AttentionParameterRow.parseTable(file)
     let row = row(table: table)
 
     func createBlockDimensions() -> (UInt16, UInt16, UInt16) {
-      guard let parallelization = UInt16(row.parallelization),
+      guard
+        let parallelization = UInt16(row.parallelization),
         let traversal = UInt16(row.traversal),
         let originalHead = UInt16(row.head)
       else {
@@ -69,20 +70,19 @@ extension AttentionDescriptor {
     }
 
     func createCacheState() -> [AttentionOperand: Bool] {
-      var expectedOperands: Set<AttentionOperand>
-      switch type {
+      let expectedOperands: Set<AttentionOperand> = switch type {
       case .forward:
-        expectedOperands = [.Q, .O]
+        [.Q, .O]
       case .backwardQuery:
-        expectedOperands = [.Q, .dO, .dQ]
+        [.Q, .dO, .dQ]
       case .backwardKeyValue:
-        expectedOperands = [.K, .V, .dV, .dK]
+        [.K, .V, .dV, .dK]
       }
 
       // Check for unexpected operands.
       let cachedOperands =
         AttentionParameterRow
-        .parseOperands(row.cachedOperands)
+          .parseOperands(row.cachedOperands)
       for operand in cachedOperands {
         guard expectedOperands.contains(operand) else {
           fatalError("Unexpected operand: \(operand)")
@@ -102,14 +102,14 @@ extension AttentionDescriptor {
     }
 
     func createHeadDimension() -> UInt16 {
-      guard let matrixDimensions = self.matrixDimensions else {
+      guard let matrixDimensions else {
         fatalError("Descriptor was incomplete.")
       }
       return matrixDimensions.head
     }
 
     func createTransposeState() -> [AttentionOperand: Bool] {
-      guard let transposeState = self.transposeState else {
+      guard let transposeState else {
         fatalError("Descriptor was incomplete.")
       }
 
@@ -147,14 +147,14 @@ extension AttentionDescriptor {
   }
 }
 
-extension AttentionDescriptor {
+public extension AttentionDescriptor {
   // Specialize the Metal function with this attention descriptor.
   //
   // You can initialize a MTLFunctionConstantValues object once, then recycle
   // it for all three kernels when gradient is requested. This may simplify
   // the code or incrementally reduce the compilation latency.
-  public func setFunctionConstants(_ constants: MTLFunctionConstantValues) {
-    guard let matrixDimensions = self.matrixDimensions else {
+  func setFunctionConstants(_ constants: MTLFunctionConstantValues) {
+    guard let matrixDimensions else {
       fatalError("Descriptor was incomplete.")
     }
 
@@ -164,16 +164,16 @@ extension AttentionDescriptor {
     constants.setConstantValue(&columnDimension, type: .uint, index: 1)
 
     // Add sparsity pattern constants
-    var hasSlidingWindow: Bool = false
+    var hasSlidingWindow = false
     var windowSize: UInt32 = 0
-    var isCausal: Bool = false
+    var isCausal = false
 
     switch sparsityPattern {
     case .none:
       break
     case .causal:
       isCausal = true
-    case .slidingWindow(let size):
+    case let .slidingWindow(size):
       hasSlidingWindow = true
       windowSize = size
     case .custom:

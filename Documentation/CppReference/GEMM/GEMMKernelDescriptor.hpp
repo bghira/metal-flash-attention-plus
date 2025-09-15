@@ -122,12 +122,12 @@ struct GEMMKernelDescriptor {
   /// - N -> blockDimensions[1]
   /// - K -> blockDimensions[2]
   std::optional<simd::ushort3> blockDimensions;
-  
+
   std::optional<GEMMOperandPrecisions> memoryPrecisions;
-  
+
   /// The device to create the kernel on.
   std::optional<MTL::Device*> device;
-  
+
   /// Optional. The layout of elements in threadgroup memory.
   ///
   /// If not specified, the default value matches the actual block dimensions.
@@ -150,7 +150,7 @@ struct GEMMKernelDescriptor {
   /// - C.M -> paddedBlockDimensions[4]
   /// - C.N -> paddedBlockDimensions[5]
   std::optional<simd::ushort8> paddedBlockDimensions;
-  
+
   /// Required. Whether async copies will improve performance during the
   /// matrix multiplication loop.
   ///
@@ -160,13 +160,13 @@ struct GEMMKernelDescriptor {
   /// matrices. Setting the value to `false` means skipping async copies when
   /// doing so will not change the final result.
   bool preferAsyncLoad = true;
-  
+
   /// Required. Whether async copies will improve performance when storing the
   /// accumulator to main memory.
   ///
   /// There is no default value that will reliably yield consistent performance.
   std::optional<bool> preferAsyncStore;
-  
+
   /// Set the register precision based on the GPU architecture, and your choice
   /// for memory precision. The following set of logic statements should provide
   /// optimal performance for all permutations of operand precisions.
@@ -186,7 +186,7 @@ struct GEMMKernelDescriptor {
   ///     regB is FP32
   /// ```
   std::optional<GEMMOperandPrecisions> registerPrecisions;
-  
+
   /// Required. The array of SIMDs to divide the threadgroup into.
   ///
   /// Optimal values:
@@ -199,7 +199,7 @@ struct GEMMKernelDescriptor {
   /// - M -> splits[0]
   /// - N -> splits[1]
   std::optional<simd::ushort2> splits;
-  
+
   /// Required. Whether each of the inputs deviates from row-major order.
   ///
   /// ## C++ Adaptation
@@ -208,11 +208,11 @@ struct GEMMKernelDescriptor {
   /// - A -> transposeState[0]
   /// - B -> transposeState[1]
   std::optional<simd::uchar2> transposeState;
-  
+
   // MARK: - Functionality from GEMMDescriptor
-  
+
   GEMMKernelDescriptor() = default;
-  
+
   /// Initialize the kernel descriptor using another descriptor, which just
   /// specifies the problem size. Then, forget the information about problem
   /// size. It will not be needed until the very far future, when the user
@@ -227,7 +227,7 @@ struct GEMMKernelDescriptor {
   ///
   /// Acceptable latency: no more than 1 μs per invocation.
   GEMMKernelDescriptor(GEMMDescriptor descriptor);
-  
+
   /// Implementation of the block size selection heuristic.
   ///
   /// This function initializes the 'blockDimensions' and
@@ -248,9 +248,9 @@ struct GEMMKernelKey {
   simd::ushort3 registerPrecisions;
   simd::ushort2 splits;
   simd::uchar2 transposeState;
-  
+
   GEMMKernelKey(GEMMKernelDescriptor);
-  
+
   bool operator==(const GEMMKernelKey& rhs) const;
 };
 

@@ -29,11 +29,11 @@ struct GEMMShaderCache {
   /// WARNING: Not thread safe. But will the DSL interpreter even use
   /// multithreading?
   static std::unordered_map<GEMMKernelKey, GEMMKernel*> libraryCache;
-  
+
   /// WARNING: Not thread safe. But will the DSL interpreter even use
   /// multithreading?
   static std::unordered_map<GEMMKey, GEMMPipelineValue*> pipelineCache;
-  
+
   /// Implementation of the logic for choosing between 'device' and
   /// 'threadgroup' store.
   ///

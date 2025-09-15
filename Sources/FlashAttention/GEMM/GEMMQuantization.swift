@@ -25,13 +25,13 @@ public struct QuantizationParameters {
 }
 
 /// Extension to handle quantization operations
-extension GEMMOperandPrecision {
+public extension GEMMOperandPrecision {
   /// Calculate quantization parameters for a tensor
   /// - Parameters:
   ///   - data: Input floating point data
   ///   - count: Number of elements
   /// - Returns: Quantization parameters optimized for the precision
-  public func calculateQuantizationParameters(data: UnsafePointer<Float>, count: Int)
+  func calculateQuantizationParameters(data: UnsafePointer<Float>, count: Int)
     -> QuantizationParameters
   {
     // Find min and max values
@@ -68,7 +68,7 @@ extension GEMMOperandPrecision {
   ///   - output: Output buffer for quantized data
   ///   - count: Number of elements
   ///   - parameters: Quantization parameters
-  public func quantize(
+  func quantize(
     input: UnsafePointer<Float>,
     output: UnsafeMutableRawPointer,
     count: Int,
@@ -90,7 +90,10 @@ extension GEMMOperandPrecision {
         let val2 =
           i + 1 < count ? Int32(round(input[i + 1] / parameters.scale)) + parameters.zeroPoint : 0
 
-        let packed1 = UInt8(max(0, min(15, val1 + 8)))  // Clamp [-8,7] to [0,15] before UInt8 conversion
+        let packed1 = UInt8(max(
+          0,
+          min(15, val1 + 8)
+        )) // Clamp [-8,7] to [0,15] before UInt8 conversion
         let packed2 = UInt8(max(0, min(15, val2 + 8)))
 
         outputUInt8[i / 2] = (packed2 << 4) | packed1
@@ -107,7 +110,7 @@ extension GEMMOperandPrecision {
   ///   - output: Output floating point buffer
   ///   - count: Number of elements
   ///   - parameters: Quantization parameters
-  public func dequantize(
+  func dequantize(
     input: UnsafeRawPointer,
     output: UnsafeMutablePointer<Float>,
     count: Int,
@@ -124,7 +127,7 @@ extension GEMMOperandPrecision {
       let inputUInt8 = input.bindMemory(to: UInt8.self, capacity: (count + 1) / 2)
       for i in stride(from: 0, to: count, by: 2) {
         let packed = inputUInt8[i / 2]
-        let val1 = Int32(packed & 0xF) - 8  // Convert from [0,15] to [-8,7]
+        let val1 = Int32(packed & 0xF) - 8 // Convert from [0,15] to [-8,7]
         let val2 = Int32(packed >> 4) - 8
 
         output[i] = (Float(val1) - Float(parameters.zeroPoint)) * parameters.scale
@@ -147,7 +150,7 @@ public class QuantizedTensor {
   public let originalShape: [Int]
 
   public init(
-    device: MTLDevice,
+    device _: MTLDevice,
     data: MTLBuffer,
     parameters: QuantizationParameters,
     elementCount: Int,
@@ -156,7 +159,7 @@ public class QuantizedTensor {
     self.data = data
     self.parameters = parameters
     self.elementCount = elementCount
-    self.originalShape = shape
+    originalShape = shape
   }
 
   /// Create a quantized tensor from floating point data
@@ -171,7 +174,9 @@ public class QuantizedTensor {
     floatData: [Float],
     shape: [Int],
     precision: GEMMOperandPrecision
-  ) -> QuantizedTensor {
+  )
+    -> QuantizedTensor
+  {
     let elementCount = floatData.count
 
     let parameters: QuantizationParameters
@@ -203,7 +208,8 @@ public class QuantizedTensor {
           input: floatPtr.baseAddress!,
           output: buffer.contents(),
           count: elementCount,
-          parameters: parameters)
+          parameters: parameters
+        )
       } else {
         // For non-quantized types, just copy the data in the appropriate format
         switch precision {
@@ -235,7 +241,8 @@ public class QuantizedTensor {
       data: buffer,
       parameters: parameters,
       elementCount: elementCount,
-      shape: shape)
+      shape: shape
+    )
   }
 
   /// Convert quantized tensor back to floating point
@@ -247,7 +254,8 @@ public class QuantizedTensor {
         input: data.contents(),
         output: floatPtr.baseAddress!,
         count: elementCount,
-        parameters: parameters)
+        parameters: parameters
+      )
     }
     return result
   }

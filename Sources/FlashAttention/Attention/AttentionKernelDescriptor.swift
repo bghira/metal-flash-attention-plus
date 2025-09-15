@@ -49,7 +49,5 @@ public struct AttentionKernelDescriptor {
 
   public var type: AttentionKernelType?
 
-  public init() {
-
-  }
+  public init() {}
 }

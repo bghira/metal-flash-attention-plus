@@ -8,7 +8,7 @@
 GEMMKernelKey::GEMMKernelKey(GEMMKernelDescriptor descriptor) {
   blockDimensions = descriptor.blockDimensions.value_or
   (simd::ushort3(UINT16_MAX));
-  
+
   if (descriptor.memoryPrecisions.has_value()) {
     auto precisions = descriptor.memoryPrecisions.value();
     memoryPrecisions = simd::ushort3 {
@@ -28,7 +28,7 @@ GEMMKernelKey::GEMMKernelKey(GEMMKernelDescriptor descriptor) {
   }
   preferAsyncLoad = descriptor.preferAsyncLoad;
   preferAsyncStore = descriptor.preferAsyncStore.value_or(UINT8_MAX);
-  
+
   if (descriptor.registerPrecisions.has_value()) {
     auto precisions = descriptor.registerPrecisions.value();
     registerPrecisions = simd::ushort3 {
@@ -80,7 +80,7 @@ GEMMKernelDescriptor::GEMMKernelDescriptor(GEMMDescriptor descriptor) {
   auto matrixDimensions = descriptor.matrixDimensions.value();
   auto memoryPrecisions = descriptor.memoryPrecisions.value();
   auto transposeState = descriptor.transposeState.value();
-  
+
   // Select the only GPU on an Apple silicon system.
   //
   // NOTE: To avoid potentially costly API calls, you may wish to cache the
@@ -96,7 +96,7 @@ GEMMKernelDescriptor::GEMMKernelDescriptor(GEMMDescriptor descriptor) {
   //   - Swift debug mode,   Metal API validation on:   ≥0 μs
   //   - Swift release mode, Metal API validation off:  ≥0 μs
   auto mtlDevice = NS::TransferPtr(MTL::CreateSystemDefaultDevice());
-  
+
   // Trim the device name to something easier to process.
   //
   // M1 Max: Apple M1 Max -> M1
@@ -119,7 +119,7 @@ GEMMKernelDescriptor::GEMMKernelDescriptor(GEMMDescriptor descriptor) {
           // appending a split to the list.
           character = ' ';
         }
-        
+
         if (character == ' ') {
           std::string split;
           for (int64_t characterID = cursor; characterID < i; ++characterID) {
@@ -131,7 +131,7 @@ GEMMKernelDescriptor::GEMMKernelDescriptor(GEMMDescriptor descriptor) {
         }
       }
     }
-    
+
     // Iterate over the space-separated words.
     std::vector<uint32_t> matchingSplitIDs;
     for (int64_t splitID = 0; splitID < splits.size(); ++splitID) {
@@ -145,25 +145,25 @@ GEMMKernelDescriptor::GEMMKernelDescriptor(GEMMDescriptor descriptor) {
       } else {
         continue;
       }
-      
+
       // Extract the second character.
       if (split.size() < 2) {
         continue;
       }
       int8_t secondCharacter = split[1];
-      
+
       // If the second character is numeric, the candidate passes.
       if (isdigit(secondCharacter)) {
         matchingSplitIDs.push_back(uint32_t(splitID));
       }
     }
     CCV_NNC_MFA_PRECONDITION(matchingSplitIDs.size() == 1);
-    
+
     uint32_t splitID = matchingSplitIDs[0];
     return splits[splitID];
   };
   std::string deviceName = createDeviceName();
-  
+
   // Find the core count.
 #if TARGET_OS_MAC
   // Typical latency to query IORegistry, provided the function has been
@@ -185,7 +185,7 @@ GEMMKernelDescriptor::GEMMKernelDescriptor(GEMMDescriptor descriptor) {
     coreCount = 10;
   }
 #endif
-  
+
   // Select the register precisions.
   GEMMOperandPrecision registerPrecisionA = memoryPrecisions.A;
   GEMMOperandPrecision registerPrecisionB = memoryPrecisions.B;
@@ -222,7 +222,7 @@ GEMMKernelDescriptor::GEMMKernelDescriptor(GEMMDescriptor descriptor) {
       registerPrecisionB = GEMMOperandPrecision::FP32;
     }
   }
-  
+
   // Set the properties of the 'GEMMKernelDescriptor' object.
   this->memoryPrecisions = memoryPrecisions;
   if (mtlDevice->supportsFamily(MTL::GPUFamily(1009))) {
@@ -241,7 +241,7 @@ GEMMKernelDescriptor::GEMMKernelDescriptor(GEMMDescriptor descriptor) {
     splits = simd::ushort2 { 1, 1 };
   }
   this->transposeState = transposeState;
-  
+
   // Set the properties that deal with block size.
   setBlockDimensions
   (mtlDevice.get(), coreCount, matrixDimensions, descriptor.batchDimension);
@@ -257,12 +257,12 @@ void GEMMKernelDescriptor::setBlockDimensions
   CCV_NNC_MFA_PRECONDITION(transposeState.has_value());
   auto memoryPrecisions = this->memoryPrecisions.value();
   auto transposeState = this->transposeState.value();
-  
+
   if (mtlDevice->supportsFamily(MTL::GPUFamily(1009))) {
     blockDimensions = simd::ushort3 { 32, 32, 8 };
     return;
   }
-  
+
   // Find the actual number of threadgroups, with a large block size.
   auto ceilDivide =
   [=](uint32_t target, uint16_t granularity) -> uint32_t {
@@ -272,7 +272,7 @@ void GEMMKernelDescriptor::setBlockDimensions
   actualGroups *= ceilDivide(matrixDimensions[0], 48);
   actualGroups *= ceilDivide(matrixDimensions[1], 48);
   actualGroups *= batchDimension;
-  
+
   // Does the kernel use 48x48x24xFP32 (9 KB) or 48x48x32xFP16/BF16 (6 KB)?
   bool useLargeAllocation = false;
   if (memoryPrecisions.A == GEMMOperandPrecision::FP32 ||
@@ -280,7 +280,7 @@ void GEMMKernelDescriptor::setBlockDimensions
       memoryPrecisions.C == GEMMOperandPrecision::FP32) {
     useLargeAllocation = true;
   }
-  
+
   // Branch on whether the allocation is large / target occupancy is low.
   if (useLargeAllocation) {
     auto idealGroups = coreCount * 6;
@@ -288,7 +288,7 @@ void GEMMKernelDescriptor::setBlockDimensions
       blockDimensions = simd::ushort3 { 32, 32, 32 };
     } else {
       blockDimensions = simd::ushort3 { 48, 48, 24 };
-      
+
       // This is verified to be optimal for:
       // - (memA, memB, memC) = (FP32, FP32, FP32)
       // - (memA, memB, memC) = (FP16, FP16, FP32)
@@ -318,7 +318,7 @@ void GEMMKernelDescriptor::setBlockDimensions
       blockDimensions = simd::ushort3 { 48, 48, 32 };
     }
   }
-  
+
   // Check that the block dimensions property has been initialized.
   CCV_NNC_MFA_PRECONDITION(blockDimensions.has_value());
 }

@@ -52,7 +52,7 @@ CommonError::~CommonError() throw ()
 }
 
 void CommonError::LogBacktrace() {
-  
+
 }
 
 
@@ -137,12 +137,12 @@ void ModuleNexusCommon::do_create(void *(*make)())
 void *ModuleNexusCommon::create(void *(*make)())
 {
     dispatch_once(&once, ^{do_create(make);});
-    
+
     if (pointer == NULL)
     {
         ModuleNexusError::throwMe();
     }
-    
+
     return pointer;
 }
 
@@ -155,7 +155,7 @@ void *ModuleNexusCommon::create(void *(*make)())
 struct MutexAttributes {
   pthread_mutexattr_t recursive;
   pthread_mutexattr_t checking;
-  
+
   MutexAttributes()
   {
     pthread_mutexattr_init(&recursive);

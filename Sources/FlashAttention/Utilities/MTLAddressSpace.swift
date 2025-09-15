@@ -11,15 +11,15 @@ public enum MTLAddressSpace {
 
   public var keyword: String {
     switch self {
-    case .device: return "device"
-    case .threadgroup: return "threadgroup"
+    case .device: "device"
+    case .threadgroup: "threadgroup"
     }
   }
 
   public var offsetType: String {
     switch self {
-    case .device: return "uint"
-    case .threadgroup: return "ushort"
+    case .device: "uint"
+    case .threadgroup: "ushort"
     }
   }
 }

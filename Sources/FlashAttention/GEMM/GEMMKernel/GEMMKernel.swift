@@ -28,7 +28,8 @@ public struct GEMMKernel {
   public var threadgroupMemoryAllocation: UInt16
 
   public init(descriptor: GEMMKernelDescriptor) {
-    guard let blockDimensions = descriptor.blockDimensions,
+    guard
+      let blockDimensions = descriptor.blockDimensions,
       let memoryPrecisions = descriptor.memoryPrecisions,
       let preferAsyncStore = descriptor.preferAsyncStore,
       let registerPrecisions = descriptor.registerPrecisions,
@@ -51,7 +52,9 @@ public struct GEMMKernel {
     func checkOperandPair(
       memory: GEMMOperandPrecision,
       register: GEMMOperandPrecision
-    ) -> Bool {
+    )
+      -> Bool
+    {
       // Truth table:
       //
       // memory | register | valid |
@@ -80,29 +83,32 @@ public struct GEMMKernel {
       // more restrictions on accepted pairs to overcome the combinatorial
       // explosion.
       if register == memory {
-        return true
+        true
       } else if register == .FP32 {
-        return true
+        true
       } else {
-        return false
+        false
       }
     }
 
     guard
       checkOperandPair(
-        memory: memoryPrecisions.A, register: registerPrecisions.A)
+        memory: memoryPrecisions.A, register: registerPrecisions.A
+      )
     else {
       fatalError("Operand A had an invalid register precision.")
     }
     guard
       checkOperandPair(
-        memory: memoryPrecisions.B, register: registerPrecisions.B)
+        memory: memoryPrecisions.B, register: registerPrecisions.B
+      )
     else {
       fatalError("Operand B had an invalid register precision.")
     }
     guard
       checkOperandPair(
-        memory: memoryPrecisions.C, register: registerPrecisions.C)
+        memory: memoryPrecisions.C, register: registerPrecisions.C
+      )
     else {
       fatalError("Operand C had an invalid register precision.")
     }
@@ -120,12 +126,13 @@ public struct GEMMKernel {
       transposeState: Bool,
       untransposedRows: UInt16,
       untransposedColumns: UInt16
-    ) -> UInt16 {
-      var expectedLeading: UInt16
-      if transposeState {
-        expectedLeading = untransposedRows
+    )
+      -> UInt16
+    {
+      var expectedLeading: UInt16 = if transposeState {
+        untransposedRows
       } else {
-        expectedLeading = untransposedColumns
+        untransposedColumns
       }
 
       var actualLeading: UInt16
@@ -147,17 +154,20 @@ public struct GEMMKernel {
       specifiedLeading: descriptor.leadingBlockDimensions?.A,
       transposeState: transposeState.A,
       untransposedRows: blockDimensions.M,
-      untransposedColumns: blockDimensions.K)
+      untransposedColumns: blockDimensions.K
+    )
     leadingBlockDimensions.B = chooseLeadingBlockDimension(
       specifiedLeading: descriptor.leadingBlockDimensions?.B,
       transposeState: transposeState.B,
       untransposedRows: blockDimensions.K,
-      untransposedColumns: blockDimensions.N)
+      untransposedColumns: blockDimensions.N
+    )
     leadingBlockDimensions.C = chooseLeadingBlockDimension(
       specifiedLeading: descriptor.leadingBlockDimensions?.C,
       transposeState: false,
       untransposedRows: blockDimensions.M,
-      untransposedColumns: blockDimensions.N)
+      untransposedColumns: blockDimensions.N
+    )
 
     // Pick the threadgroup memory allocation size.
     threadgroupMemoryAllocation = .zero
@@ -168,9 +178,9 @@ public struct GEMMKernel {
 extension GEMMKernel {
   func memoryName(_ operand: String) -> String {
     switch operand {
-    case "A": return memoryPrecisions.A.name
-    case "B": return memoryPrecisions.B.name
-    case "C": return memoryPrecisions.C.name
+    case "A": memoryPrecisions.A.name
+    case "B": memoryPrecisions.B.name
+    case "C": memoryPrecisions.C.name
     default:
       fatalError("Unrecognized operand.")
     }
@@ -178,9 +188,9 @@ extension GEMMKernel {
 
   func registerName(_ operand: String) -> String {
     switch operand {
-    case "A": return registerPrecisions.A.name
-    case "B": return registerPrecisions.B.name
-    case "C": return registerPrecisions.C.name
+    case "A": registerPrecisions.A.name
+    case "B": registerPrecisions.B.name
+    case "C": registerPrecisions.C.name
     default:
       fatalError("Unrecognized operand.")
     }
@@ -188,9 +198,9 @@ extension GEMMKernel {
 
   func transposed(_ operand: String) -> Bool {
     switch operand {
-    case "A": return transposeState.A
-    case "B": return transposeState.B
-    case "C": return false
+    case "A": transposeState.A
+    case "B": transposeState.B
+    case "C": false
     default: fatalError("Unrecognized operand.")
     }
   }
@@ -198,14 +208,14 @@ extension GEMMKernel {
 
 extension GEMMKernel {
   func leadingDimension(_ operand: String) -> String {
-    return "\(operand)_leading_dimension"
+    "\(operand)_leading_dimension"
   }
 
   func leadingBlockDimension(_ operand: String) -> UInt16 {
     switch operand {
-    case "A": return leadingBlockDimensions.A
-    case "B": return leadingBlockDimensions.B
-    case "C": return leadingBlockDimensions.C
+    case "A": leadingBlockDimensions.A
+    case "B": leadingBlockDimensions.B
+    case "C": leadingBlockDimensions.C
     default: fatalError("Unrecognized operand.")
     }
   }
@@ -215,24 +225,29 @@ extension GEMMKernel {
       _ transposeState: Bool,
       _ untransposedRows: UInt16,
       _ untransposedColumns: UInt16
-    ) -> UInt16 {
+    )
+      -> UInt16
+    {
       if transposeState {
-        return untransposedColumns
+        untransposedColumns
       } else {
-        return untransposedRows
+        untransposedRows
       }
     }
 
     switch operand {
     case "A":
       return chooseTrailingBlockDimension(
-        transposed("A"), blockDimensions.M, blockDimensions.K)
+        transposed("A"), blockDimensions.M, blockDimensions.K
+      )
     case "B":
       return chooseTrailingBlockDimension(
-        transposed("B"), blockDimensions.K, blockDimensions.N)
+        transposed("B"), blockDimensions.K, blockDimensions.N
+      )
     case "C":
       return chooseTrailingBlockDimension(
-        transposed("C"), blockDimensions.M, blockDimensions.N)
+        transposed("C"), blockDimensions.M, blockDimensions.N
+      )
     default:
       fatalError("Unrecognized operand.")
     }
@@ -273,9 +288,9 @@ extension GEMMKernel {
   }
 
   private func createThreadgroupMemoryAllocation() -> UInt16 {
-    let blockBytesA = self.blockBytes("A")
-    let blockBytesB = self.blockBytes("B")
-    let blockBytesC = self.blockBytes("C")
+    let blockBytesA = blockBytes("A")
+    let blockBytesB = blockBytes("B")
+    let blockBytesC = blockBytes("C")
     return max(blockBytesA + blockBytesB, blockBytesC)
   }
 }

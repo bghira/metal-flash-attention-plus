@@ -30,15 +30,15 @@ public enum GEMMOperandPrecision: UInt16 {
   public var name: String {
     switch self {
     case .FP32:
-      return "float"
+      "float"
     case .FP16:
-      return "half"
+      "half"
     case .BF16:
-      return "bfloat"
+      "bfloat"
     case .INT8:
-      return "char"
+      "char"
     case .INT4:
-      return "uchar"  // Stored as packed 4-bit values in 8-bit containers
+      "uchar" // Stored as packed 4-bit values in 8-bit containers
     }
   }
 
@@ -46,15 +46,15 @@ public enum GEMMOperandPrecision: UInt16 {
   public var size: Int {
     switch self {
     case .FP32:
-      return 4
+      4
     case .FP16:
-      return 2
+      2
     case .BF16:
-      return 2
+      2
     case .INT8:
-      return 1
+      1
     case .INT4:
-      return 1  // Two 4-bit values packed into one byte
+      1 // Two 4-bit values packed into one byte
     }
   }
 
@@ -62,9 +62,9 @@ public enum GEMMOperandPrecision: UInt16 {
   public var requiresQuantizationParameters: Bool {
     switch self {
     case .FP32, .FP16, .BF16:
-      return false
+      false
     case .INT8, .INT4:
-      return true
+      true
     }
   }
 
@@ -72,11 +72,11 @@ public enum GEMMOperandPrecision: UInt16 {
   public var accumulatorPrecision: GEMMOperandPrecision {
     switch self {
     case .FP32, .FP16, .BF16:
-      return .FP32
+      .FP32
     case .INT8:
-      return .FP32  // Use FP32 accumulator for INT8 operations
+      .FP32 // Use FP32 accumulator for INT8 operations
     case .INT4:
-      return .FP32  // Use FP32 accumulator for INT4 operations
+      .FP32 // Use FP32 accumulator for INT4 operations
     }
   }
 }

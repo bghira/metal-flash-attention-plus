@@ -19,7 +19,7 @@
 int main(int argc, const char * argv[]) {
   // insert code here...
   std::cout << "Hello, World!\n";
-  
+
   // M1 Max
   //
   // 511^3, BF16, NN | 5149 GFLOPS
@@ -41,13 +41,13 @@ int main(int argc, const char * argv[]) {
   // 1489^3, BF16, NT | 8395 GFLOPS
   // 1489^3, BF16, TN | 8378 GFLOPS
   // 1489^3, BF16, TT | 8642 GFLOPS
-  
+
   // Specify the problem configuration.
   int64_t problemSize = 10;
-  
+
   // Instantiate the descriptor.
   GEMMDescriptor gemmDesc;
-  gemmDesc.matrixDimensions = simd::uint3 { 
+  gemmDesc.matrixDimensions = simd::uint3 {
     uint32_t(problemSize),
     uint32_t(problemSize),
     uint32_t(problemSize),
@@ -58,7 +58,7 @@ int main(int argc, const char * argv[]) {
     .C = GEMMOperandPrecision::BF16,
   };
   gemmDesc.transposeState = simd::uchar2 { false, false };
-  
+
   // Instantiate the kernel.
   auto pool = NS::AutoreleasePool::alloc()->init();
   GEMMShaderCache::fetchKernel(gemmDesc);
@@ -66,10 +66,10 @@ int main(int argc, const char * argv[]) {
   pool->drain();
   auto kernel = pipelineValue->kernel;
   auto pipeline = pipelineValue->pipeline;
-  
+
   // Instantiate the device.
   auto device = NS::TransferPtr(MTL::CreateSystemDefaultDevice());
-  
+
   // Set up the diagonal matrix multiplication.
   std::vector<float> A;
   std::vector<float> B;
@@ -90,7 +90,7 @@ int main(int argc, const char * argv[]) {
         } else {
           A.push_back(0);
         }
-        
+
         if (rowID < 5 && columnID < 5) {
           int64_t address = rowID * 5 + columnID;
           float value = B_contents[address];
@@ -100,12 +100,12 @@ int main(int argc, const char * argv[]) {
         } else {
           B.push_back(0);
         }
-        
+
         C.push_back(0);
       }
     }
   }
-  
+
   // Utility functions for type casting.
   auto memcpyDeviceTransfer =
   [=]
@@ -116,7 +116,7 @@ int main(int argc, const char * argv[]) {
         // FP32
         auto* gpuPointer = (float*)gpu + i;
         auto* cpuPointer = (float*)cpu + i;
-        
+
         if (isCPUToGPU) {
           gpuPointer[0] = cpuPointer[0];
         } else {
@@ -126,7 +126,7 @@ int main(int argc, const char * argv[]) {
         // FP16
         auto* gpuPointer = (_Float16*)gpu + i;
         auto* cpuPointer = (float*)cpu + i;
-        
+
         if (isCPUToGPU) {
           gpuPointer[0] = cpuPointer[0];
         } else {
@@ -136,7 +136,7 @@ int main(int argc, const char * argv[]) {
         // BF16
         auto* gpuPointer = (uint16_t*)gpu + i;
         auto* cpuPointer = (uint16_t*)cpu + 2 * i;
-        
+
         if (isCPUToGPU) {
           gpuPointer[0] = cpuPointer[1];
         } else {
@@ -146,7 +146,7 @@ int main(int argc, const char * argv[]) {
       }
     }
   };
-  
+
   // Allocate and fill the buffers.
   int64_t squareMatrixBytes = problemSize * problemSize * sizeof(float);
   auto bufferA = NS::TransferPtr(device->newBuffer
@@ -164,16 +164,16 @@ int main(int argc, const char * argv[]) {
     (bufferB->contents(), B.data(), elements, true,
      gemmDesc.memoryPrecisions.value().B);
   }
-  
+
   // Instantiate the command queue.
   auto commandQueue = NS::TransferPtr(device->newCommandQueue());
-  
+
   // Multiply A with B.
   int64_t maxGFLOPS = 0;
   int64_t occupancy = pipeline->maxTotalThreadsPerThreadgroup();
   for (int64_t trialID = 0; trialID < 15; ++trialID) {
     int64_t duplicatedCommandCount = 20;
-    
+
     auto commandBuffer = commandQueue->commandBuffer();
     auto encoder = commandBuffer->computeCommandEncoder();
     encoder->setComputePipelineState(pipeline.get());
@@ -181,7 +181,7 @@ int main(int argc, const char * argv[]) {
     encoder->setBuffer(bufferA.get(), 0, 0);
     encoder->setBuffer(bufferB.get(), 0, 1);
     encoder->setBuffer(bufferC.get(), 0, 2);
-    
+
     for (int64_t commandID = 0; commandID < duplicatedCommandCount; ++commandID) {
       auto ceilDivide =
       [=](int64_t target, uint16_t granularity) -> int64_t {
@@ -198,21 +198,21 @@ int main(int argc, const char * argv[]) {
     encoder->endEncoding();
     commandBuffer->commit();
     commandBuffer->waitUntilCompleted();
-    
+
     // Determine the time taken.
     double start = commandBuffer->GPUStartTime();
     double end = commandBuffer->GPUEndTime();
     double latency = end - start;
-    
+
     // Determine the amount of work done.
     int64_t operations = 2 * problemSize * problemSize * problemSize;
     operations *= duplicatedCommandCount;
     int64_t gflops = int64_t(double(operations) / double(latency) / 1e9);
-    
+
     // Report the results.
     maxGFLOPS = std::max(maxGFLOPS, gflops);
   }
-  
+
   // Copy the results to C.
   {
     int64_t elements = problemSize * problemSize;
@@ -220,7 +220,7 @@ int main(int argc, const char * argv[]) {
     (bufferC->contents(), C.data(), elements, false,
      gemmDesc.memoryPrecisions.value().C);
   }
-  
+
   if (true) {
     // Display the matrices.
     auto displayMatrix =
@@ -230,27 +230,27 @@ int main(int argc, const char * argv[]) {
         for (int64_t columnID = 0; columnID < loopCount; ++columnID) {
           auto address = rowID * problemSize + columnID;
           float entry = matrix[address];
-          
+
           std::cout << std::setprecision(4);
           std::cout << entry << " ";
         }
         std::cout << "\n";
       }
     };
-    
+
     std::cout << "\n";
     std::cout << "A:\n";
     displayMatrix(A.data());
-    
+
     std::cout << "\n";
     std::cout << "B:\n";
     displayMatrix(B.data());
-    
+
     std::cout << "\n";
     std::cout << "C:\n";
     displayMatrix(C.data());
   }
-  
+
   // Choose an error threshold.
   float errorThreshold = 1e-5;
   if (gemmDesc.memoryPrecisions.value().A == GEMMOperandPrecision::BF16) {
@@ -259,7 +259,7 @@ int main(int argc, const char * argv[]) {
   if (gemmDesc.memoryPrecisions.value().B == GEMMOperandPrecision::BF16) {
     errorThreshold = 2e-1;
   }
-  
+
   // Check the results.
   {
     int64_t errorCount = 0;
@@ -272,14 +272,14 @@ int main(int argc, const char * argv[]) {
         } else {
           entryC = C[rowID * problemSize + columnID];
         }
-        
+
         float actual = entryC;
         float expected = entryB * 2;
         float error = actual - expected;
         if (error < 0) {
           error = -error;
         }
-        
+
         if (error < errorThreshold) {
           // Skip ahead to the next iteration. There is no error message to
           // throw.
@@ -290,7 +290,7 @@ int main(int argc, const char * argv[]) {
           continue;
         }
         errorCount += 1;
-        
+
         std::cout << "C[" << rowID << "][" << columnID << "] | ";
         std::cout << "error: " << error << " | ";
         std::cout << "actual: " << actual << " | ";
@@ -299,7 +299,7 @@ int main(int argc, const char * argv[]) {
       }
     }
   }
-  
+
   // Report the performance.
   std::cout << std::endl;
   GEMMShaderCache::fetchKernel(gemmDesc);
@@ -307,6 +307,6 @@ int main(int argc, const char * argv[]) {
   std::cout << std::endl;
   std::cout << occupancy << " threads/core ";
   std::cout << std::endl;
-  
+
   return 0;
 }
