@@ -52,7 +52,7 @@ jobs:
   # Swift package testing with linting
   swift-tests:
     name: Swift Tests and Linting
-    runs-on: macos-15
+    runs-on: macos-15-xlarge
     strategy:
       matrix:
         configuration: [debug, release]
