@@ -614,10 +614,16 @@ extension QuantizedAttention {
         char q_quantized = Q_quantized[q_idx];
         float q_dequantized = (float(q_quantized) - float(q_zero_point)) * q_scale;
 
-        // Clipped straight-through estimator
-        float ste_gradient = 1.0f;
+        // Improved straight-through estimator based on 2024 research
+        // Research shows identity gradients (STE with Q'(x) = 1) work better than zeroing
+        float ste_gradient = 1.0f;  // Always use identity gradient
+
+        // Apply soft clipping to the gradient instead of hard zeroing
+        float clip_factor = 1.0f;
         if (abs(q_dequantized) > ste_clip_range) {
-            ste_gradient = 0.0f;  // Zero gradient outside quantization range
+            // Soft attenuation instead of hard zero - reduces gradient sparsity
+            clip_factor = ste_clip_range / abs(q_dequantized);
+            clip_factor = max(clip_factor, 0.1f);  // Minimum 10% gradient flow
         }
 
         // Initialize gradient output to zero first
@@ -669,8 +675,8 @@ extension QuantizedAttention {
         // Apply final clamping to prevent NaN/Inf
         dq_accumulator = clamp(dq_accumulator, -10.0f, 10.0f);
 
-        // Apply straight-through estimator
-        dQ[row * K_dim + col] = dq_accumulator * ste_gradient;
+        // Apply improved straight-through estimator with soft clipping
+        dQ[row * K_dim + col] = dq_accumulator * ste_gradient * clip_factor;
     }
     """
   }
@@ -720,9 +726,21 @@ extension QuantizedAttention {
         float k_dequantized = (float(k_quantized) - float(k_zero_point)) * k_scale;
         float v_dequantized = (float(v_quantized) - float(v_zero_point)) * v_scale;
 
-        // Clipped straight-through estimators
-        float k_ste = (abs(k_dequantized) <= ste_clip_range) ? 1.0f : 0.0f;
-        float v_ste = (abs(v_dequantized) <= ste_clip_range) ? 1.0f : 0.0f;
+        // Improved straight-through estimators based on 2024 research
+        float k_ste = 1.0f;  // Always use identity gradient
+        float v_ste = 1.0f;  // Always use identity gradient
+
+        // Apply soft clipping factors instead of hard zeroing
+        float k_clip_factor = 1.0f;
+        float v_clip_factor = 1.0f;
+        if (abs(k_dequantized) > ste_clip_range) {
+            k_clip_factor = ste_clip_range / abs(k_dequantized);
+            k_clip_factor = max(k_clip_factor, 0.1f);  // Minimum 10% gradient flow
+        }
+        if (abs(v_dequantized) > ste_clip_range) {
+            v_clip_factor = ste_clip_range / abs(v_dequantized);
+            v_clip_factor = max(v_clip_factor, 0.1f);  // Minimum 10% gradient flow
+        }
 
         // Initialize outputs to zero first
         dK[row * K_dim + col] = 0.0f;
@@ -766,9 +784,9 @@ extension QuantizedAttention {
         dk_accumulator = clamp(dk_accumulator, -100.0f, 100.0f);
         dv_accumulator = clamp(dv_accumulator, -100.0f, 100.0f);
 
-        // Apply straight-through estimators and store
-        dK[row * K_dim + col] = dk_accumulator * k_ste;
-        dV[row * K_dim + col] = dv_accumulator * v_ste;
+        // Apply improved straight-through estimators with soft clipping and store
+        dK[row * K_dim + col] = dk_accumulator * k_ste * k_clip_factor;
+        dV[row * K_dim + col] = dv_accumulator * v_ste * v_clip_factor;
     }
     """
   }
