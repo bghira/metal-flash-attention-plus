@@ -40,7 +40,8 @@ final class RectangularAttentionTest: XCTestCase {
 /// Run a test with the specified configuration.
 private func runCorrectnessTest(descriptor: AttentionDescriptor) {
   // Check that all properties of the descriptor have been set.
-  guard let matrixDimensions = descriptor.matrixDimensions,
+  guard
+    let matrixDimensions = descriptor.matrixDimensions,
     let transposeState = descriptor.transposeState
   else {
     fatalError("Descriptor was incomplete.")
@@ -73,14 +74,16 @@ private func runCorrectnessTest(descriptor: AttentionDescriptor) {
     let functionConstants = MTLFunctionConstantValues()
     attentionDesc.setFunctionConstants(functionConstants)
     let function = try! library.makeFunction(
-      name: "attention", constantValues: functionConstants)
+      name: "attention", constantValues: functionConstants
+    )
 
     // A critical part of the heuristic: force the occupancy to 1024 on M1.
     let pipelineDesc = MTLComputePipelineDescriptor()
     pipelineDesc.computeFunction = function
     pipelineDesc.maxTotalThreadsPerThreadgroup = 1024
     return try! device.makeComputePipelineState(
-      descriptor: pipelineDesc, options: [], reflection: nil)
+      descriptor: pipelineDesc, options: [], reflection: nil
+    )
   }
   let pipelineForward = createPipeline(kernel: kernelForward)
   let pipelineBackwardQuery = createPipeline(kernel: kernelBackwardQuery)
@@ -93,7 +96,8 @@ private func runCorrectnessTest(descriptor: AttentionDescriptor) {
     let sequenceDimension = input.count / headDimension
 
     var output = [Float](
-      repeating: .zero, count: sequenceDimension * headDimension)
+      repeating: .zero, count: sequenceDimension * headDimension
+    )
     for n in 0..<sequenceDimension {
       for d in 0..<headDimension {
         let inputAddress = n * headDimension + d
@@ -110,7 +114,8 @@ private func runCorrectnessTest(descriptor: AttentionDescriptor) {
     let sequenceDimension = output.count / headDimension
 
     var input = [Float](
-      repeating: .zero, count: sequenceDimension * headDimension)
+      repeating: .zero, count: sequenceDimension * headDimension
+    )
     for n in 0..<sequenceDimension {
       for d in 0..<headDimension {
         let inputAddress = n * headDimension + d
@@ -145,7 +150,9 @@ private func runCorrectnessTest(descriptor: AttentionDescriptor) {
   // Returns a zero-initialized array.
   func createArray(
     _ operand: AttentionOperand
-  ) -> [Float] {
+  )
+    -> [Float]
+  {
     var size: Int
     switch operand {
     case .K, .V, .dV, .dK:
@@ -165,7 +172,9 @@ private func runCorrectnessTest(descriptor: AttentionDescriptor) {
   func createBuffer(
     _ operand: AttentionOperand,
     contents: [Float]
-  ) -> MTLBuffer {
+  )
+    -> MTLBuffer
+  {
     let memoryPrecisions = attentionDesc.memoryPrecisions
     guard let precision = memoryPrecisions[operand] else {
       fatalError("Precision of operand \(operand) was not specified.")
@@ -197,7 +206,9 @@ private func runCorrectnessTest(descriptor: AttentionDescriptor) {
   @discardableResult
   func executeCommandBuffer(
     dispatchCount: Int
-  ) -> Double {
+  )
+    -> Double
+  {
     let commandQueue = MTLContext.global.commandQueue
     let commandBuffer = commandQueue.makeCommandBuffer()!
     let encoder = commandBuffer.makeComputeCommandEncoder()!
@@ -214,20 +225,25 @@ private func runCorrectnessTest(descriptor: AttentionDescriptor) {
     ) {
       encoder.setComputePipelineState(pipeline)
       encoder.setThreadgroupMemoryLength(
-        Int(kernel.threadgroupMemoryAllocation), index: 0)
+        Int(kernel.threadgroupMemoryAllocation), index: 0
+      )
 
       let blockCount = ceilDivide(
-        parallelizationDimension, kernel.blockDimensions.parallelization)
+        parallelizationDimension, kernel.blockDimensions.parallelization
+      )
       let gridSize = MTLSize(
         width: blockCount,
         height: 1,
-        depth: 1)
+        depth: 1
+      )
       let groupSize = MTLSize(
         width: Int(kernel.threadgroupSize),
         height: 1,
-        depth: 1)
+        depth: 1
+      )
       encoder.dispatchThreadgroups(
-        gridSize, threadsPerThreadgroup: groupSize)
+        gridSize, threadsPerThreadgroup: groupSize
+      )
     }
 
     encoder.setBuffer(bufferQ, offset: 0, index: 0)
@@ -247,15 +263,18 @@ private func runCorrectnessTest(descriptor: AttentionDescriptor) {
       dispatch(
         kernel: kernelForward,
         pipeline: pipelineForward,
-        along: Int(matrixDimensions.row))
+        along: Int(matrixDimensions.row)
+      )
       dispatch(
         kernel: kernelBackwardQuery,
         pipeline: pipelineBackwardQuery,
-        along: Int(matrixDimensions.row))
+        along: Int(matrixDimensions.row)
+      )
       dispatch(
         kernel: kernelBackwardKeyValue,
         pipeline: pipelineBackwardKeyValue,
-        along: Int(matrixDimensions.column))
+        along: Int(matrixDimensions.column)
+      )
     }
 
     encoder.endEncoding()
@@ -276,7 +295,9 @@ private func runCorrectnessTest(descriptor: AttentionDescriptor) {
   func readBuffer(
     _ operand: AttentionOperand,
     contents: MTLBuffer
-  ) -> [Float] {
+  )
+    -> [Float]
+  {
     let memoryPrecisions = attentionDesc.memoryPrecisions
     guard let precision = memoryPrecisions[operand] else {
       fatalError("Precision of operand \(operand) was not specified.")
@@ -433,7 +454,8 @@ private func runCorrectnessTest(descriptor: AttentionDescriptor) {
       let error = (expected[i] - actual[i]).magnitude
       if error > tolerance || error.isNaN {
         // Don't report errors in this case.
-        if expected[i].isNaN || expected[i].isInfinite,
+        if
+          expected[i].isNaN || expected[i].isInfinite,
           actual[i].isNaN || actual[i].isInfinite
         {
           continue

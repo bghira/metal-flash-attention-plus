@@ -5,7 +5,9 @@ extension MTLContext {
   func createBuffer(
     _ originalData: [Float],
     _ precision: GEMMOperandPrecision
-  ) -> MTLBuffer {
+  )
+    -> MTLBuffer
+  {
     // Add random numbers to expose out-of-bounds accesses.
     var augmentedData = originalData
 
@@ -92,7 +94,7 @@ extension MTLContext {
         let packedByte = casted[address / 2]
         let isLowNibble = address % 2 == 0
         let nibble = isLowNibble ? (packedByte & 0xF) : (packedByte >> 4)
-        entry32 = Float(Int32(nibble) - 8)  // Convert from [0,15] to [-8,7]
+        entry32 = Float(Int32(nibble) - 8) // Convert from [0,15] to [-8,7]
       }
       array[address] = entry32
     }

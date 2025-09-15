@@ -13,10 +13,12 @@ let package = Package(
     .visionOS(.v1),
   ],
   products: [
-    // Products define the executables and libraries a package produces, making them visible to other packages.
+    // Products define the executables and libraries a package produces, making them visible to
+    // other packages.
     .library(
       name: "FlashAttention",
-      targets: ["FlashAttention"]),
+      targets: ["FlashAttention"]
+    ),
   ],
   targets: [
     // Targets are the basic building blocks of a package, defining a module or a test suite.
@@ -24,10 +26,12 @@ let package = Package(
     .target(
       name: "FlashAttention",
       resources: [
-        .copy("GEMM/GEMMQuantizedKernels.metal")
-      ]),
+        .copy("GEMM/GEMMQuantizedKernels.metal"),
+      ]
+    ),
     .testTarget(
       name: "FlashAttentionTests",
-      dependencies: ["FlashAttention"]),
+      dependencies: ["FlashAttention"]
+    ),
   ]
 )

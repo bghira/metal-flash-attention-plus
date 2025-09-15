@@ -23,8 +23,11 @@ struct AttentionAccumulateDescriptor {
 extension AttentionKernel {
   func accumulate(
     descriptor accumulateDesc: AttentionAccumulateDescriptor
-  ) -> String {
-    guard let A = accumulateDesc.A,
+  )
+    -> String
+  {
+    guard
+      let A = accumulateDesc.A,
       let B = accumulateDesc.B,
       let C = accumulateDesc.C
     else {
@@ -35,21 +38,25 @@ extension AttentionKernel {
 
     func allocateAccumulator(
       descriptor: LoopIterationDescriptor
-    ) -> String {
+    )
+      -> String
+    {
       guard !cached(C) else {
         return ""
       }
       return """
 
-        simdgroup_matrix_storage<\(registerName(C))> \
-        \(C)_sram[\(descriptor.registerSize) / 8];
+      simdgroup_matrix_storage<\(registerName(C))> \
+      \(C)_sram[\(descriptor.registerSize) / 8];
 
-        """
+      """
     }
 
     func initializeAccumulator(
       descriptor: LoopIterationDescriptor
-    ) -> String {
+    )
+      -> String
+    {
       """
 
       #pragma clang loop unroll(full)
@@ -64,53 +71,57 @@ extension AttentionKernel {
     func scaleAccumulator(
       by scale: String?,
       descriptor: LoopIterationDescriptor
-    ) -> String {
+    )
+      -> String
+    {
       guard let scale else {
         return ""
       }
       return """
 
-        #pragma clang loop unroll(full)
-        for (ushort d = 0; d < \(descriptor.registerSize); d += 8) {
-          auto \(C) = \(C)_sram + (\(descriptor.registerOffset) + d) / 8;
-          *(\(C)->thread_elements()) *= \(scale);
-        }
+      #pragma clang loop unroll(full)
+      for (ushort d = 0; d < \(descriptor.registerSize); d += 8) {
+        auto \(C) = \(C)_sram + (\(descriptor.registerOffset) + d) / 8;
+        *(\(C)->thread_elements()) *= \(scale);
+      }
 
-        """
+      """
     }
 
     // MARK: - Load/Store Accumulator
 
     func declareAccumulatorLocation(
       descriptor: LoopIterationDescriptor
-    ) -> String {
+    )
+      -> String
+    {
       switch descriptor.addressSpaceLHS! {
       case .device:
-        return """
+        """
 
-          uint2 \(C)_src_offset(
-            morton_offset.x + d_outer,
-            \(clampedParallelizationThreadOffset));
-          auto \(C)_src = simdgroup_matrix_storage<\(memoryName(C))>
-          ::apply_offset(
-            \(C), \(leadingDimension(C)),
-            \(C)_src_offset, \(transposed(C)));
+        uint2 \(C)_src_offset(
+          morton_offset.x + d_outer,
+          \(clampedParallelizationThreadOffset));
+        auto \(C)_src = simdgroup_matrix_storage<\(memoryName(C))>
+        ::apply_offset(
+          \(C), \(leadingDimension(C)),
+          \(C)_src_offset, \(transposed(C)));
 
-          """
+        """
       case .threadgroup:
-        return """
+        """
 
-          ushort2 \(C)_block_offset(
-            morton_offset.x,
-            morton_offset.y + sidx * 8);
-          auto \(C)_src = (threadgroup \(memoryName(C))*)(threadgroup_block);
-          \(C)_src = simdgroup_matrix_storage<\(memoryName(C))>
-          ::apply_offset(
-            \(C)_src, \(leadingBlockDimension(C)),
-            \(C)_block_offset, \(transposed(C)));
-          threadgroup_barrier(mem_flags::mem_threadgroup);
+        ushort2 \(C)_block_offset(
+          morton_offset.x,
+          morton_offset.y + sidx * 8);
+        auto \(C)_src = (threadgroup \(memoryName(C))*)(threadgroup_block);
+        \(C)_src = simdgroup_matrix_storage<\(memoryName(C))>
+        ::apply_offset(
+          \(C)_src, \(leadingBlockDimension(C)),
+          \(C)_block_offset, \(transposed(C)));
+        threadgroup_barrier(mem_flags::mem_threadgroup);
 
-          """
+        """
       }
     }
 
@@ -125,7 +136,7 @@ extension AttentionKernel {
           \(C), \(leadingDimension(C)),
           \(C)_offset, \(transposed(C)));
         auto dst = (threadgroup \(memoryName(C))*)(threadgroup_block);
-        
+
         ushort D_dimension = min(
           ushort(\(blockDimensions.head)),
           ushort(\(headDimension) - d_outer));
@@ -133,7 +144,7 @@ extension AttentionKernel {
           uint(\(blockDimensions.parallelization)),
           uint(\(parallelizationDimension) - \(parallelizationGroupOffset)));
         ushort2 tile(D_dimension, R_dimension);
-        
+
         simdgroup_event event;
         event.async_copy(
           dst, \(leadingBlockDimension(C)), tile,
@@ -155,7 +166,7 @@ extension AttentionKernel {
         ::apply_offset(
           \(C), \(leadingDimension(C)),
           \(C)_offset, \(transposed(C)));
-        
+
         ushort D_dimension = min(
           ushort(\(blockDimensions.head)),
           ushort(\(headDimension) - d_outer));
@@ -163,7 +174,7 @@ extension AttentionKernel {
           uint(\(blockDimensions.parallelization)),
           uint(\(parallelizationDimension) - \(parallelizationGroupOffset)));
         ushort2 tile(D_dimension, R_dimension);
-        
+
         simdgroup_event event;
         event.async_copy(
           dst, \(leadingDimension(C)), tile,
@@ -176,79 +187,97 @@ extension AttentionKernel {
 
     func loadAccumulator(
       descriptor: LoopIterationDescriptor
-    ) -> String {
+    )
+      -> String
+    {
       switch descriptor.addressSpaceLHS! {
       case .device:
-        return """
+        """
 
-          \(declareAccumulatorLocation(descriptor: descriptor))
+        \(declareAccumulatorLocation(descriptor: descriptor))
 
-          #pragma clang loop unroll(full)
-          for (ushort d = 0; d < \(descriptor.registerSize); d += 8) {
-            ushort2 \(C)_origin(d, 0);
-            \(C)_sram[d / 8].\(loadCall(C, src: "\(C)_src", leadingDim: "\(leadingDimension(C))", origin: "\(C)_origin", transpose: "\(transposed(C))"));
-          }
+        #pragma clang loop unroll(full)
+        for (ushort d = 0; d < \(descriptor.registerSize); d += 8) {
+          ushort2 \(C)_origin(d, 0);
+          \(C)_sram[d / 8].\(loadCall(
+            C,
+            src: "\(C)_src",
+            leadingDim: "\(leadingDimension(C))",
+            origin: "\(C)_origin",
+            transpose: "\(transposed(C))"
+          ));
+        }
 
-          """
+        """
       case .threadgroup:
-        return """
+        """
 
-          \(asyncLoadAccumulator())
-          \(declareAccumulatorLocation(descriptor: descriptor))
+        \(asyncLoadAccumulator())
+        \(declareAccumulatorLocation(descriptor: descriptor))
 
-          #pragma clang loop unroll(full)
-          for (ushort d = 0; d < \(descriptor.registerSize); d += 8) {
-            ushort2 \(C)_origin(d, 0);
-            \(C)_sram[d / 8].\(loadCall(C, src: "\(C)_src", leadingDim: "\(leadingBlockDimension(C))", origin: "\(C)_origin", transpose: "\(transposed(C))"));
-          }
+        #pragma clang loop unroll(full)
+        for (ushort d = 0; d < \(descriptor.registerSize); d += 8) {
+          ushort2 \(C)_origin(d, 0);
+          \(C)_sram[d / 8].\(loadCall(
+            C,
+            src: "\(C)_src",
+            leadingDim: "\(leadingBlockDimension(C))",
+            origin: "\(C)_origin",
+            transpose: "\(transposed(C))"
+          ));
+        }
 
-          """
+        """
       }
     }
 
     func storeAccumulator(
       descriptor: LoopIterationDescriptor
-    ) -> String {
+    )
+      -> String
+    {
       switch descriptor.addressSpaceLHS! {
       case .device:
-        return """
+        """
 
-          \(declareAccumulatorLocation(descriptor: descriptor))
+        \(declareAccumulatorLocation(descriptor: descriptor))
 
-          if (\(unsafeParallelizationThreadOffset) < \(parallelizationDimension)) {
-            #pragma clang loop unroll(full)
-            for (ushort d = 0; d < \(descriptor.registerSize); d += 8) {
-              ushort2 \(C)_origin(d, 0);
-              \(C)_sram[d / 8].\(storeFunction(C))(
-                \(C)_src, \(leadingDimension(C)),
-                \(C)_origin, \(transposed(C)));
-            }
-          }
-
-          """
-      case .threadgroup:
-        return """
-
-          \(declareAccumulatorLocation(descriptor: descriptor))
-
+        if (\(unsafeParallelizationThreadOffset) < \(parallelizationDimension)) {
           #pragma clang loop unroll(full)
           for (ushort d = 0; d < \(descriptor.registerSize); d += 8) {
             ushort2 \(C)_origin(d, 0);
             \(C)_sram[d / 8].\(storeFunction(C))(
-              \(C)_src, \(leadingBlockDimension(C)),
+              \(C)_src, \(leadingDimension(C)),
               \(C)_origin, \(transposed(C)));
           }
+        }
 
-          \(asyncStoreAccumulator())
+        """
+      case .threadgroup:
+        """
 
-          """
+        \(declareAccumulatorLocation(descriptor: descriptor))
+
+        #pragma clang loop unroll(full)
+        for (ushort d = 0; d < \(descriptor.registerSize); d += 8) {
+          ushort2 \(C)_origin(d, 0);
+          \(C)_sram[d / 8].\(storeFunction(C))(
+            \(C)_src, \(leadingBlockDimension(C)),
+            \(C)_origin, \(transposed(C)));
+        }
+
+        \(asyncStoreAccumulator())
+
+        """
       }
     }
 
     func cacheAccumulator(
       descriptor: LoopIterationDescriptor,
       type: CachingOperationType
-    ) -> String {
+    )
+      -> String
+    {
       guard !cached(C) else {
         return ""
       }
@@ -264,88 +293,94 @@ extension AttentionKernel {
 
     func leadingDimensionRHS(
       _ descriptor: LoopIterationDescriptor
-    ) -> String {
+    )
+      -> String
+    {
       switch descriptor.addressSpaceRHS! {
       case .device:
-        return leadingDimension(B)
+        leadingDimension(B)
       case .threadgroup:
-        return "\(leadingBlockDimension(B))"
+        "\(leadingBlockDimension(B))"
       }
     }
 
     func declareRHSLocation(
       descriptor: LoopIterationDescriptor
-    ) -> String {
+    )
+      -> String
+    {
       switch descriptor.addressSpaceRHS! {
       case .device:
-        return """
+        """
 
-          uint2 \(B)_src_offset(
-            morton_offset.x + d_outer,
-            morton_offset.y + \(traversalOffset));
-          auto \(B)_src = simdgroup_matrix_storage<\(memoryName(B))>
-          ::apply_offset(
-            \(B), \(leadingDimension(B)),
-            \(B)_src_offset, \(transposed(B)));
+        uint2 \(B)_src_offset(
+          morton_offset.x + d_outer,
+          morton_offset.y + \(traversalOffset));
+        auto \(B)_src = simdgroup_matrix_storage<\(memoryName(B))>
+        ::apply_offset(
+          \(B), \(leadingDimension(B)),
+          \(B)_src_offset, \(transposed(B)));
 
-          """
+        """
       case .threadgroup:
-        return """
+        """
 
-          ushort2 \(B)_block_offset(
-            morton_offset.x,
-            morton_offset.y);
-          auto \(B)_src = (threadgroup \(memoryName(B))*)(threadgroup_block);
-          \(B)_src = simdgroup_matrix_storage<\(memoryName(B))>
-          ::apply_offset(
-            \(B)_src, \(leadingBlockDimension(B)),
-            \(B)_block_offset, \(transposed(B)));
-          threadgroup_barrier(mem_flags::mem_threadgroup);
+        ushort2 \(B)_block_offset(
+          morton_offset.x,
+          morton_offset.y);
+        auto \(B)_src = (threadgroup \(memoryName(B))*)(threadgroup_block);
+        \(B)_src = simdgroup_matrix_storage<\(memoryName(B))>
+        ::apply_offset(
+          \(B)_src, \(leadingBlockDimension(B)),
+          \(B)_block_offset, \(transposed(B)));
+        threadgroup_barrier(mem_flags::mem_threadgroup);
 
-          """
+        """
       }
     }
 
     func loadRHS(
       descriptor: LoopIterationDescriptor
-    ) -> String {
+    )
+      -> String
+    {
       switch descriptor.addressSpaceRHS! {
       case .device:
-        return declareRHSLocation(descriptor: descriptor)
+        declareRHSLocation(descriptor: descriptor)
       case .threadgroup:
-        return """
+        """
 
-          threadgroup_barrier(mem_flags::mem_threadgroup);
-          if (sidx == 0) {
-            uint2 \(B)_offset(d_outer, \(traversalOffset));
-            auto src = simdgroup_matrix_storage<\(memoryName(B))>
-            ::apply_offset(
-              \(B), \(leadingDimension(B)),
-              \(B)_offset, \(transposed(B)));
-            auto dst = (threadgroup \(memoryName(B))*)(threadgroup_block);
-            
-            ushort D_dimension = min(
-              ushort(\(blockDimensions.head)),
-              ushort(\(headDimension) - d_outer));
-            ushort C_src_dimension = min(
-              uint(\(blockDimensions.traversal)),
-              uint(\(traversalDimension) - \(traversalOffset)));
-            ushort C_dst_dimension = max(
-              ushort(\(paddedTraversalEdge)),
-              ushort(C_src_dimension));
-            ushort2 tile_src(D_dimension, C_src_dimension);
-            ushort2 tile_dst(D_dimension, C_dst_dimension);
-            
-            simdgroup_event event;
-            event.async_copy(
-              dst, \(leadingBlockDimension(B)), tile_dst,
-              src, \(leadingDimension(B)), tile_src, \(transposed(B)));
-            simdgroup_event::wait(1, &event);
-          }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        if (sidx == 0) {
+          uint2 \(B)_offset(d_outer, \(traversalOffset));
+          auto src = simdgroup_matrix_storage<\(memoryName(B))>
+          ::apply_offset(
+            \(B), \(leadingDimension(B)),
+            \(B)_offset, \(transposed(B)));
+          auto dst = (threadgroup \(memoryName(B))*)(threadgroup_block);
 
-          \(declareRHSLocation(descriptor: descriptor))
+          ushort D_dimension = min(
+            ushort(\(blockDimensions.head)),
+            ushort(\(headDimension) - d_outer));
+          ushort C_src_dimension = min(
+            uint(\(blockDimensions.traversal)),
+            uint(\(traversalDimension) - \(traversalOffset)));
+          ushort C_dst_dimension = max(
+            ushort(\(paddedTraversalEdge)),
+            ushort(C_src_dimension));
+          ushort2 tile_src(D_dimension, C_src_dimension);
+          ushort2 tile_dst(D_dimension, C_dst_dimension);
 
-          """
+          simdgroup_event event;
+          event.async_copy(
+            dst, \(leadingBlockDimension(B)), tile_dst,
+            src, \(leadingDimension(B)), tile_src, \(transposed(B)));
+          simdgroup_event::wait(1, &event);
+        }
+
+        \(declareRHSLocation(descriptor: descriptor))
+
+        """
       }
     }
 
@@ -353,7 +388,9 @@ extension AttentionKernel {
 
     func innerLoopHead(
       descriptor: LoopIterationDescriptor
-    ) -> String {
+    )
+      -> String
+    {
       """
 
       #pragma clang loop unroll(full)
@@ -361,8 +398,14 @@ extension AttentionKernel {
         // Load the RHS from memory.
         ushort2 \(B)_origin(d, c);
         simdgroup_matrix_storage<\(registerName(B))> \(B);
-        \(B).\(loadCall(B, src: "\(B)_src", leadingDim: "\(leadingDimensionRHS(descriptor))", origin: "\(B)_origin", transpose: "\(transposed(B))"));
-        
+        \(B).\(loadCall(
+          B,
+          src: "\(B)_src",
+          leadingDim: "\(leadingDimensionRHS(descriptor))",
+          origin: "\(B)_origin",
+          transpose: "\(transposed(B))"
+        ));
+
         // Issue one SIMD matmul instruction.
         \(C)_sram[(\(descriptor.registerOffset) + d) / 8].multiply(
           \(A)_sram[c / 8], \(B), /*accumulate=*/true);
@@ -375,15 +418,17 @@ extension AttentionKernel {
       traversalStart: String,
       traversalEnd: String,
       descriptor: LoopIterationDescriptor
-    ) -> String {
-      return """
+    )
+      -> String
+    {
+      """
 
-        #pragma clang loop unroll(full)
-        for (ushort c = \(traversalStart); c < \(traversalEnd); c += 8) {
-          \(innerLoopHead(descriptor: descriptor))
-        }
+      #pragma clang loop unroll(full)
+      for (ushort c = \(traversalStart); c < \(traversalEnd); c += 8) {
+        \(innerLoopHead(descriptor: descriptor))
+      }
 
-        """
+      """
     }
 
     // MARK: - Outer Loop
@@ -397,78 +442,90 @@ extension AttentionKernel {
 
     func loopIteration(
       descriptor: LoopIterationDescriptor
-    ) -> String {
+    )
+      -> String
+    {
       func multiplyAB() -> String {
         if descriptor.addressSpaceLHS! == .device || descriptor.addressSpaceRHS! == .device {
           let blockDim = blockDimensions.traversal
           return """
 
-            \(innerLoopTraversal(
-              traversalStart: "0",
-              traversalEnd: "\(blockDim)",
-              descriptor: descriptor))
-            if (
-              (\(traversalDimension) % \(blockDim) == 0) &&
-              (\(traversalOffset) + \(blockDim) == \(traversalDimension))
-            ) {
-               \(scaleAccumulator(
-                 by: accumulateDesc.lastIterationScale,
-                 descriptor: descriptor))
-            }
+          \(innerLoopTraversal(
+            traversalStart: "0",
+            traversalEnd: "\(blockDim)",
+            descriptor: descriptor
+          ))
+          if (
+            (\(traversalDimension) % \(blockDim) == 0) &&
+            (\(traversalOffset) + \(blockDim) == \(traversalDimension))
+          ) {
+             \(scaleAccumulator(
+               by: accumulateDesc.lastIterationScale,
+               descriptor: descriptor
+             ))
+          }
 
-            """
+          """
         } else {
           return """
 
+          \(innerLoopTraversal(
+            traversalStart: "0",
+            traversalEnd: paddedTraversalEdge,
+            descriptor: descriptor
+          ))
+          if (\(traversalOffset) + \(blockDimensions.traversal)
+              < \(traversalDimension)) {
             \(innerLoopTraversal(
-              traversalStart: "0",
-              traversalEnd: paddedTraversalEdge,
-              descriptor: descriptor))
-            if (\(traversalOffset) + \(blockDimensions.traversal)
-                < \(traversalDimension)) {
-              \(innerLoopTraversal(
-                traversalStart: paddedTraversalEdge,
-                traversalEnd: "\(blockDimensions.traversal)",
-                descriptor: descriptor))
-            } else {
-              \(scaleAccumulator(
-                by: accumulateDesc.lastIterationScale,
-                descriptor: descriptor))
-            }
+              traversalStart: paddedTraversalEdge,
+              traversalEnd: "\(blockDimensions.traversal)",
+              descriptor: descriptor
+            ))
+          } else {
+            \(scaleAccumulator(
+              by: accumulateDesc.lastIterationScale,
+              descriptor: descriptor
+            ))
+          }
 
-            """
+          """
         }
       }
 
       return """
 
-        \(allocateAccumulator(descriptor: descriptor))
-        if (\(traversalOffset) == 0) {
-          \(initializeAccumulator(descriptor: descriptor))
-        } else {
-          \(cacheAccumulator(
-            descriptor: descriptor,
-            type: .load))
-          \(scaleAccumulator(
-            by: accumulateDesc.everyIterationScale,
-            descriptor: descriptor))
-        }
-        \(loadRHS(descriptor: descriptor))
-        \(multiplyAB())
+      \(allocateAccumulator(descriptor: descriptor))
+      if (\(traversalOffset) == 0) {
+        \(initializeAccumulator(descriptor: descriptor))
+      } else {
         \(cacheAccumulator(
           descriptor: descriptor,
-          type: .store))
+          type: .load
+        ))
+        \(scaleAccumulator(
+          by: accumulateDesc.everyIterationScale,
+          descriptor: descriptor
+        ))
+      }
+      \(loadRHS(descriptor: descriptor))
+      \(multiplyAB())
+      \(cacheAccumulator(
+        descriptor: descriptor,
+        type: .store
+      ))
 
-        """
+      """
     }
 
     func gatedLoopIteration(
       descriptor: LoopIterationDescriptor
-    ) -> String {
+    )
+      -> String
+    {
       var descriptorThreadgroup = descriptor
       descriptorThreadgroup.addressSpaceLHS = .threadgroup
       descriptorThreadgroup.addressSpaceRHS = .threadgroup
-      if preferAsyncCache && preferAsyncLoad {
+      if preferAsyncCache, preferAsyncLoad {
         return loopIteration(descriptor: descriptorThreadgroup)
       }
 
@@ -486,24 +543,24 @@ extension AttentionKernel {
 
       let blockDim = blockDimensions.traversal
       let condition = """
-        (
-          (\(traversalDimension) % \(blockDim) == 0) ||
-          (\(traversalOffset) + \(blockDim) <= \(traversalDimension))
-        ) && (
-          (\(headDimension) % 8 == 0) ||
-          (d_outer + \(descriptor.registerSize) <= \(headDimension))
-        )
-        """
+      (
+        (\(traversalDimension) % \(blockDim) == 0) ||
+        (\(traversalOffset) + \(blockDim) <= \(traversalDimension))
+      ) && (
+        (\(headDimension) % 8 == 0) ||
+        (d_outer + \(descriptor.registerSize) <= \(headDimension))
+      )
+      """
 
       return """
 
-        if (\(condition)) {
-          \(loopIteration(descriptor: descriptorDevice))
-        } else {
-          \(loopIteration(descriptor: descriptorThreadgroup))
-        }
+      if (\(condition)) {
+        \(loopIteration(descriptor: descriptorDevice))
+      } else {
+        \(loopIteration(descriptor: descriptorThreadgroup))
+      }
 
-        """
+      """
     }
 
     // MARK: - Top Level Specification
@@ -518,17 +575,17 @@ extension AttentionKernel {
 
     func unrollStatement() -> String {
       if cached(C) {
-        return "#pragma clang loop unroll(full)"
+        "#pragma clang loop unroll(full)"
       } else {
-        return "#pragma clang loop unroll(disable)"
+        "#pragma clang loop unroll(disable)"
       }
     }
 
     func registerOffset() -> String {
       if cached(C) {
-        return "d_outer"
+        "d_outer"
       } else {
-        return "0"
+        "0"
       }
     }
 
@@ -539,16 +596,16 @@ extension AttentionKernel {
 
       return """
 
-        \(unrollStatement())
-        for (
-          ushort d_outer = 0;
-          d_outer < \(loopEndFloor());
-          d_outer += \(blockDimensions.head)
-        ) {
-          \(gatedLoopIteration(descriptor: descriptor))
-        }
+      \(unrollStatement())
+      for (
+        ushort d_outer = 0;
+        d_outer < \(loopEndFloor());
+        d_outer += \(blockDimensions.head)
+      ) {
+        \(gatedLoopIteration(descriptor: descriptor))
+      }
 
-        """
+      """
     }
 
     func lastIteration() -> String {
@@ -558,20 +615,20 @@ extension AttentionKernel {
 
       return """
 
-        if (\(loopEndFloor() < loopEnd())) {
-          ushort d_outer = \(loopEndFloor());
-          \(gatedLoopIteration(descriptor: descriptor))
-        }
+      if (\(loopEndFloor() < loopEnd())) {
+        ushort d_outer = \(loopEndFloor());
+        \(gatedLoopIteration(descriptor: descriptor))
+      }
 
-        """
+      """
     }
 
     // Collect all of the statements into one string.
     return """
 
-      \(firstIterations())
-      \(lastIteration())
+    \(firstIterations())
+    \(lastIteration())
 
-      """
+    """
   }
 }

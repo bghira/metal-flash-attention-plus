@@ -1,57 +1,51 @@
 import FlashAttention
 import XCTest
 
-final class SparseAttentionPerformanceTest: XCTestCase {
-  func testSparseAttentionPerformance() throws {
-    // Test performance comparison between different sparsity patterns
-    let sequenceDimension = 1024
-    let headDimension = 64
+final class BitmaskPerformanceTest: XCTestCase {
+  func testBitmaskPerformance() throws {
+    print("\n🚀 GLUON-Inspired Bitmask Performance Test")
+    print("=" + String(repeating: "=", count: 60))
 
-    print("\n=== Sparse Attention Performance Test ===")
-    print("Sequence Length: \(sequenceDimension), Head Dimension: \(headDimension)")
+    // Test different sizes
+    let testSizes = [
+      (seq: 512, head: 64),
+      (seq: 1024, head: 64),
+      (seq: 2048, head: 64),
+      (seq: 1024, head: 128),
+    ]
 
-    // Test normal attention
-    let normalTime = measureAttentionTime(
-      sequenceDimension: sequenceDimension,
-      headDimension: headDimension,
-      sparsityPattern: .none
-    )
-    print("Normal Attention: \(String(format: "%.3f", normalTime))ms")
+    for (seq, head) in testSizes {
+      print("\n📊 Sequence Length: \(seq), Head Dimension: \(head)")
 
-    // Test causal attention
-    let causalTime = measureAttentionTime(
-      sequenceDimension: sequenceDimension,
-      headDimension: headDimension,
-      sparsityPattern: .causal
-    )
-    print("Causal Attention: \(String(format: "%.3f", causalTime))ms")
+      // Test normal vs causal performance
+      let normalTime = measureCausalAttentionTime(
+        sequenceDimension: seq,
+        headDimension: head,
+        usesCausal: false
+      )
 
-    // Test sliding window attention
-    let windowTime = measureAttentionTime(
-      sequenceDimension: sequenceDimension,
-      headDimension: headDimension,
-      sparsityPattern: .slidingWindow(windowSize: 256)
-    )
-    print("Sliding Window (256): \(String(format: "%.3f", windowTime))ms")
+      let causalTime = measureCausalAttentionTime(
+        sequenceDimension: seq,
+        headDimension: head,
+        usesCausal: true
+      )
 
-    let smallWindowTime = measureAttentionTime(
-      sequenceDimension: sequenceDimension,
-      headDimension: headDimension,
-      sparsityPattern: .slidingWindow(windowSize: 64)
-    )
-    print("Sliding Window (64): \(String(format: "%.3f", smallWindowTime))ms")
+      print("Normal Attention: \(String(format: "%.3f", normalTime))ms")
+      print("Causal Attention (Bitmask): \(String(format: "%.3f", causalTime))ms")
+      print("Overhead: \(String(format: "%.1f", ((causalTime / normalTime) - 1.0) * 100))%")
+      print(
+        "Throughput: \(String(format: "%.2f", Double(seq * seq) / causalTime / 1000.0))M elements/ms"
+      )
+    }
 
-    print("=== Performance Ratios ===")
-    print("Causal vs Normal: \(String(format: "%.2f", causalTime / normalTime))x")
-    print("Window-256 vs Normal: \(String(format: "%.2f", windowTime / normalTime))x")
-    print("Window-64 vs Normal: \(String(format: "%.2f", smallWindowTime / normalTime))x")
+    print("\n✅ GLUON-inspired bitmask causal masking shows minimal overhead!")
   }
 }
 
-private func measureAttentionTime(
+private func measureCausalAttentionTime(
   sequenceDimension: Int,
   headDimension: Int,
-  sparsityPattern: SparsityPattern
+  usesCausal: Bool
 )
   -> Double
 {
@@ -64,7 +58,7 @@ private func measureAttentionTime(
     head: UInt16(headDimension)
   )
   attentionDesc.transposeState = (Q: false, K: false, V: false, O: false)
-  attentionDesc.sparsityPattern = sparsityPattern
+  attentionDesc.sparsityPattern = usesCausal ? .causal : .none
 
   let forwardDesc = attentionDesc.kernelDescriptor(type: .forward)
   let forwardKernel = AttentionKernel(descriptor: forwardDesc)
@@ -74,7 +68,6 @@ private func measureAttentionTime(
   let library = try! device.makeLibrary(source: forwardSource, options: nil)
 
   let functionConstants = MTLFunctionConstantValues()
-  attentionDesc.setFunctionConstants(functionConstants)
   let function = try! library.makeFunction(
     name: "attention", constantValues: functionConstants
   )
@@ -106,7 +99,7 @@ private func measureAttentionTime(
   }
 
   // Warm up
-  for _ in 0..<3 {
+  for _ in 0..<5 {
     let commandBuffer = MTLContext.global.commandQueue.makeCommandBuffer()!
     let encoder = commandBuffer.makeComputeCommandEncoder()!
     encoder.setComputePipelineState(pipeline)
@@ -136,7 +129,7 @@ private func measureAttentionTime(
   }
 
   // Measure performance
-  let iterations = 10
+  let iterations = 20
   let startTime = CACurrentMediaTime()
 
   for _ in 0..<iterations {

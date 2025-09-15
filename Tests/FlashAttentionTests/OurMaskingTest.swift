@@ -3,7 +3,6 @@ import XCTest
 @testable import FlashAttention
 
 final class OurMaskingTest: XCTestCase {
-
   func testCausalMasking() throws {
     print("🎭 Testing Our Causal Masking Implementation")
     print("=" + String(repeating: "=", count: 50))
@@ -23,28 +22,31 @@ final class OurMaskingTest: XCTestCase {
     descriptor.transposeState = (Q: false, K: false, V: false, O: false)
 
     print("Testing without causal masking...")
-    descriptor.maskType = .none
+    descriptor.sparsityPattern = .none
     let nonCausalKernel = AttentionKernel(
       descriptor: descriptor.kernelDescriptor(type: .forward)
     )
     print("✅ Non-causal kernel created")
-    print("   Mask type: \(nonCausalKernel.maskType)")
+    print("   Sparsity pattern: none")
 
     print("\nTesting with causal masking...")
-    descriptor.maskType = .causal
+    descriptor.sparsityPattern = .causal
     let causalKernel = AttentionKernel(
       descriptor: descriptor.kernelDescriptor(type: .forward)
     )
     print("✅ Causal kernel created")
-    print("   Mask type: \(causalKernel.maskType)")
+    print("   Sparsity pattern: causal")
 
     print("\nTesting custom masking...")
-    descriptor.maskType = .custom
+    descriptor.sparsityPattern = .custom(
+      blockMask: [true, false, false, true],
+      blockSize: (row: 2, col: 2)
+    )
     let customKernel = AttentionKernel(
       descriptor: descriptor.kernelDescriptor(type: .forward)
     )
     print("✅ Custom kernel created")
-    print("   Mask type: \(customKernel.maskType)")
+    print("   Sparsity pattern: custom")
 
     // Check generated source code
     print("\n🔍 Checking generated Metal source...")

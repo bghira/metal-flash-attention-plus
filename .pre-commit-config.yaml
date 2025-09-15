@@ -1,0 +1,57 @@
+# Pre-commit hooks configuration for Metal Flash Attention Plus
+# See https://pre-commit.com for more information
+repos:
+  # Swift formatting
+  - repo: https://github.com/nicklockwood/SwiftFormat
+    rev: 0.54.3
+    hooks:
+      - id: swiftformat
+        args: ["--config", ".swiftformat"]
+
+  # General file formatting
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.6.0
+    hooks:
+      - id: trailing-whitespace
+        exclude: '\.md$'
+      - id: end-of-file-fixer
+        exclude: '\.md$'
+      - id: check-yaml
+      - id: check-json
+      - id: check-toml
+      - id: check-merge-conflict
+      - id: check-added-large-files
+        args: ['--maxkb=1000']
+      - id: mixed-line-ending
+        args: ['--fix=lf']
+
+  # Markdown formatting
+  - repo: https://github.com/igorshubovych/markdownlint-cli
+    rev: v0.41.0
+    hooks:
+      - id: markdownlint
+        args: ["--fix"]
+        files: '\.md$'
+
+  # Swift testing
+  - repo: local
+    hooks:
+      - id: swift-test
+        name: Swift Tests
+        entry: swift test
+        language: system
+        files: '\.(swift)$'
+        pass_filenames: false
+
+# Configuration for ci
+ci:
+  autofix_commit_msg: |
+    [pre-commit.ci] auto fixes from pre-commit hooks
+
+    for more information, see https://pre-commit.ci
+  autofix_prs: true
+  autoupdate_branch: ''
+  autoupdate_commit_msg: '[pre-commit.ci] pre-commit autoupdate'
+  autoupdate_schedule: weekly
+  skip: [swift-test]  # Skip Swift tests until build issues are resolved
+  submodules: false

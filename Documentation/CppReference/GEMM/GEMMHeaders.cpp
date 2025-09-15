@@ -94,7 +94,7 @@ namespace metal
     clamp_to_zero = 0,
     clamp_to_edge = 1
   };
-  
+
   struct simdgroup_event {
     METAL_FUNC simdgroup_event() thread {}
 
@@ -108,13 +108,13 @@ namespace metal
         // Description of the data type.
         sizeof(T),
         alignof(T),
-        
+
         // Description of the arguments.
         reinterpret_cast<threadgroup void *>(dst),
         reinterpret_cast<const device void *>(src),
         n_elements);
     }
-    
+
     template <typename T>
     METAL_FUNC void async_copy(
       device T *dst,
@@ -125,13 +125,13 @@ namespace metal
         // Description of the data type.
         sizeof(T),
         alignof(T),
-        
+
         // Description of the arguments.
         reinterpret_cast<device void *>(dst),
         reinterpret_cast<const threadgroup void *>(src),
         n_elements);
     }
-    
+
     template <typename T>
     METAL_FUNC void async_copy(
       // Description of the destination.
@@ -174,7 +174,7 @@ namespace metal
         long2(0),
         static_cast<int>(clamp_mode));
     }
-    
+
     template <typename T>
     METAL_FUNC void async_copy(
       // Description of the destination.
@@ -215,12 +215,12 @@ namespace metal
         long2(0),
         0);
     }
-    
+
     METAL_FUNC static void wait(int count, thread simdgroup_event *events) {
       __metal_wait_simdgroup_events(
         count, reinterpret_cast<thread _simdgroup_event_t**>(events));
     }
-    
+
   private:
     // Invoking the generation of LLVM bitcode for async copies.
     //
@@ -257,12 +257,12 @@ std::string createMetalSimdgroupMatrixStorage() {
   // Address generation:
   // - casts some intermediate address fragments to 'ulong' for 'device'
   // - keeps all address fragments in 'ushort' for 'threadgroup'
-  
+
   enum class AddressSpace {
     device,
     threadgroup,
   };
-  
+
   auto keyword =
   [=](AddressSpace value) -> std::string {
     switch (value) {
@@ -272,7 +272,7 @@ std::string createMetalSimdgroupMatrixStorage() {
         return "threadgroup";
     }
   };
-  
+
   auto offsetType =
   [=](AddressSpace value) -> std::string {
     switch (value) {
@@ -282,19 +282,19 @@ std::string createMetalSimdgroupMatrixStorage() {
         return "ushort";
     }
   };
-  
+
   enum class Action {
     load,
     store,
   };
-  
+
   struct MemoryAccessDescriptor {
     std::optional<Action> action;
     std::optional<AddressSpace> addressSpace;
     std::optional<bool> decodingBF16;
     int64_t indentationSpaceCount = 0;
   };
-  
+
   auto createMemoryAccess =
   [=](MemoryAccessDescriptor descriptor) -> std::string {
     CCV_NNC_MFA_PRECONDITION(descriptor.action.has_value());
@@ -304,7 +304,7 @@ std::string createMetalSimdgroupMatrixStorage() {
     auto addressSpace = descriptor.addressSpace.value();
     auto decodingBF16 = descriptor.decodingBF16.value();
     std::string indentation(descriptor.indentationSpaceCount, ' ');
-    
+
     // Determine the arguments.
     std::vector<std::string> arguments;
     auto pointerArgument = [=](std::string dataType) {
@@ -322,7 +322,7 @@ std::string createMetalSimdgroupMatrixStorage() {
     arguments.push_back(offsetType(addressSpace) + " elements_per_row");
     arguments.push_back("ushort2 matrix_origin");
     arguments.push_back("bool transpose_matrix = false");
-    
+
     // Create the warning comment.
     std::string output = "";
     if (decodingBF16) {
@@ -330,7 +330,7 @@ std::string createMetalSimdgroupMatrixStorage() {
     } else {
       output += indentation + "template <typename U>\n";
     }
-    
+
     // Create the function signature.
     output += indentation + "METAL_FUNC void";
     if (action == Action::load) {
@@ -345,27 +345,27 @@ std::string createMetalSimdgroupMatrixStorage() {
     for (int64_t it = 0; it < arguments.size(); ++it) {
       int64_t argumentID = it;
       std::string argument = arguments[argumentID];
-      
+
       output += argument;
       if (argumentID < arguments.size() - 1) {
         output += ", ";
       }
     }
     output += ") {\n";
-    
+
     auto createAddress =
     [=](bool transposed, int64_t offset) -> std::string {
       auto lineY = offsetType(addressSpace) + "(matrix_origin.y)";
       auto lineX = "matrix_origin.x + " + std::to_string(offset);
       lineX = offsetType(addressSpace) + "(" + lineX + ")";
-      
+
       if (transposed) {
         return lineX + " * elements_per_row + " + lineY;
       } else {
         return lineY + " * elements_per_row + " + lineX;
       }
     };
-    
+
     auto createTwoPartAccess =
     [=](bool transposed) -> std::vector<std::string> {
       // Generate the addresses.
@@ -375,7 +375,7 @@ std::string createMetalSimdgroupMatrixStorage() {
         (offsetType(addressSpace) + " address" + std::to_string(laneID) +
          " = " + createAddress(transposed, laneID));
       }
-      
+
       if (action == Action::load) {
         if (decodingBF16) {
           lines.push_back("bfloat memoryForm0 = src[address0]");
@@ -385,13 +385,13 @@ std::string createMetalSimdgroupMatrixStorage() {
           lines.push_back("U memoryForm1 = src[address1]");
         }
       }
-      
+
       if (action == Action::load) {
         if (decodingBF16) {
           // Separate the loading logic from the decoding logic for clarity.
           lines.push_back
           ("");
-          
+
           // BF16 decoding logic.
           lines.push_back
           ("bfloat4 registerForm = *(thread bfloat4*)(thread_elements())");
@@ -423,7 +423,7 @@ std::string createMetalSimdgroupMatrixStorage() {
           ("T registerForm1 = ((thread T*)thread_elements())[1]");
         }
       }
-      
+
       if (action == Action::store) {
         if (decodingBF16) {
           lines.push_back("dst[address0] = registerForm[2]");
@@ -435,7 +435,7 @@ std::string createMetalSimdgroupMatrixStorage() {
       }
       return lines;
     };
-    
+
     auto createOnePartAccess =
     [=]() -> std::vector<std::string> {
       std::vector<std::string> lines;
@@ -448,11 +448,11 @@ std::string createMetalSimdgroupMatrixStorage() {
           lines.push_back
           ("bfloat2 memoryForm = *(const " +
            keyword(addressSpace) + " packed_bfloat2*)(src + combinedAddress)");
-          
+
           // Separate the loading logic from the decoding logic for clarity.
           lines.push_back
           ("");
-          
+
           // BF16 decoding logic.
           lines.push_back
           ("bfloat4 registerForm = *(thread bfloat4*)(thread_elements())");
@@ -491,7 +491,7 @@ std::string createMetalSimdgroupMatrixStorage() {
       }
       return lines;
     };
-    
+
     auto insertBlockContents =
     [=](std::vector<std::string>& body, std::vector<std::string> block) {
       for (std::string line : block) {
@@ -499,12 +499,12 @@ std::string createMetalSimdgroupMatrixStorage() {
         bool allCharactersWhitespace = true;
         for (int8_t character : line) {
           if (isspace(character)) {
-            
+
           } else {
             allCharactersWhitespace = false;
           }
         }
-        
+
         // Branch on the result of this check.
         if (allCharactersWhitespace) {
           body.push_back("  ");
@@ -513,12 +513,12 @@ std::string createMetalSimdgroupMatrixStorage() {
         }
       }
     };
-    
+
     // Determine the lines of the 'if' block.
     std::vector<std::string> body;
     body.push_back("if (transpose_matrix) {");
     insertBlockContents(body, createTwoPartAccess(true));
-    
+
     // Determine the lines of the 'else' block.
     if (decodingBF16) {
       std::vector<std::string> blockContents;
@@ -527,7 +527,7 @@ std::string createMetalSimdgroupMatrixStorage() {
       } else {
         blockContents = createTwoPartAccess(false);
       }
-      
+
       body.push_back("} else {");
       insertBlockContents(body, blockContents);
       body.push_back("}");
@@ -538,7 +538,7 @@ std::string createMetalSimdgroupMatrixStorage() {
       insertBlockContents(body, createOnePartAccess());
       body.push_back("}");
     }
-    
+
     // Create the function body.
     for (std::string line : body) {
       output += indentation + "  " + line + "\n";
@@ -546,7 +546,7 @@ std::string createMetalSimdgroupMatrixStorage() {
     output += indentation + "}\n";
     return output;
   };
-  
+
   // Add the first section of the shader.
   std::string output;
   output += R"(
@@ -577,17 +577,17 @@ std::string createMetalSimdgroupMatrixStorage() {
 METAL_FUNC static ushort2 morton_order(ushort thread_index_in_simdgroup) {
   ushort lane_id = thread_index_in_simdgroup;
   ushort quad_id = lane_id / 4;
-  
+
   constexpr ushort QUADRANT_SPAN_M = 4;
   constexpr ushort THREADS_PER_QUADRANT = 8;
   ushort M_floor_of_quadrant = (quad_id / 4) * QUADRANT_SPAN_M;
   ushort M_in_quadrant = (lane_id / 2) % (THREADS_PER_QUADRANT / 2);
   ushort M_in_simd = M_floor_of_quadrant + M_in_quadrant;
-  
+
   ushort N_floor_of_quadrant = (quad_id & 2) * 2; // 0 or 4
   ushort N_in_quadrant = (lane_id % 2) * 2; // 0 or 2
   ushort N_in_simd = N_floor_of_quadrant + N_in_quadrant;
-  
+
   return ushort2(N_in_simd, M_in_simd);
 }
 
@@ -597,15 +597,15 @@ namespace metal
   template <typename T>
   struct simdgroup_matrix_storage {
     typedef vec<T, 64> storage_type;
-    
+
     storage_type t;
-    
+
     METAL_FUNC thread vec<T, 2>* thread_elements() thread {
       return reinterpret_cast<thread vec<T, 2>*>(&t);
     }
-    
+
     METAL_FUNC simdgroup_matrix_storage() thread = default;
-    
+
     METAL_FUNC simdgroup_matrix_storage(vec<T, 2> thread_elements) thread {
       *(this->thread_elements()) = thread_elements;
     }
@@ -617,7 +617,7 @@ namespace metal
         return src + ulong(matrix_origin.y * elements_per_row) + matrix_origin.x;
       }
     }
-    
+
     METAL_FUNC static threadgroup T* apply_offset(threadgroup T *src, ushort elements_per_row, ushort2 matrix_origin, bool transpose_matrix = false) {
       if (transpose_matrix) {
         return src + matrix_origin.x * elements_per_row + matrix_origin.y;
@@ -627,10 +627,10 @@ namespace metal
     }
 
 )";
-  
+
   MemoryAccessDescriptor desc;
   desc.indentationSpaceCount = 4;
-  
+
   std::vector actions = { Action::load, Action::store };
   std::vector addressSpaces = {
     AddressSpace::device, AddressSpace::threadgroup
@@ -641,7 +641,7 @@ namespace metal
       for (auto decodingBF16 : decodingBF16s) {
         desc.action = action;
         desc.addressSpace = addressSpace;
-        
+
         desc.decodingBF16 = decodingBF16;
         output += createMemoryAccess(desc);
         output += "\n";

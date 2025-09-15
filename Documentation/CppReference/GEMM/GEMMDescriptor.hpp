@@ -13,7 +13,7 @@ struct GEMMDescriptor {
   /// multiplication of (sub)matrices located at arbitrary pointers in memory
   /// (with potentially nonuniform stride or noncontiguous padding).
   int64_t batchDimension = 1;
-  
+
   /// The dimensions of the input and output matrices.
   /// - Parameter M: Number of output columns.
   /// - Parameter N: Number of output rows.
@@ -27,9 +27,9 @@ struct GEMMDescriptor {
   /// requires consideration of more failure points than just integer
   /// overflows.
   std::optional<simd::uint3> matrixDimensions;
-  
+
   std::optional<GEMMOperandPrecisions> memoryPrecisions;
-  
+
   std::optional<simd::uchar2> transposeState;
 };
 
@@ -38,9 +38,9 @@ struct GEMMKey {
   simd::uint3 matrixDimensions;
   simd::ushort3 memoryPrecisions;
   simd::uchar2 transposeState;
-  
+
   GEMMKey(GEMMDescriptor);
-  
+
   bool operator==(const GEMMKey& rhs) const;
 };
 

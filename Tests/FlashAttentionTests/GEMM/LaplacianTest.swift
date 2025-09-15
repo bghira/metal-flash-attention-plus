@@ -118,8 +118,11 @@ final class LaplacianTest: XCTestCase {
 /// - lane 1: occupancy in threads/core
 private func profileProblemSize(
   descriptor: GEMMDescriptor
-) -> SIMD2<Int> {
-  guard let matrixDimensions = descriptor.matrixDimensions,
+)
+  -> SIMD2<Int>
+{
+  guard
+    let matrixDimensions = descriptor.matrixDimensions,
     matrixDimensions.M == matrixDimensions.N,
     matrixDimensions.M == matrixDimensions.K
   else {
@@ -132,7 +135,8 @@ private func profileProblemSize(
   var B = [Float](repeating: .zero, count: problemSize * problemSize)
   var C = [Float](repeating: .zero, count: problemSize * problemSize)
   var previousOperandC = [Float](
-    repeating: .zero, count: problemSize * problemSize)
+    repeating: .zero, count: problemSize * problemSize
+  )
 
   // Initialize A as the 2nd-order periodic Laplacian.
   for diagonalID in 0..<problemSize {
@@ -203,7 +207,8 @@ private func profileProblemSize(
       let encoder = commandBuffer.makeComputeCommandEncoder()!
       encoder.setComputePipelineState(pipeline)
       encoder.setThreadgroupMemoryLength(
-        Int(kernel.threadgroupMemoryAllocation), index: 0)
+        Int(kernel.threadgroupMemoryAllocation), index: 0
+      )
       encoder.setBuffer(bufferA, offset: 0, index: 0)
       encoder.setBuffer(bufferB, offset: 0, index: 1)
       encoder.setBuffer(bufferC, offset: 0, index: 2)
@@ -215,13 +220,16 @@ private func profileProblemSize(
         let gridSize = MTLSize(
           width: ceilDivide(problemSize, kernel.blockDimensions.N),
           height: ceilDivide(problemSize, kernel.blockDimensions.M),
-          depth: 1)
+          depth: 1
+        )
         let groupSize = MTLSize(
           width: Int(kernel.threadgroupSize),
           height: 1,
-          depth: 1)
+          depth: 1
+        )
         encoder.dispatchThreadgroups(
-          gridSize, threadsPerThreadgroup: groupSize)
+          gridSize, threadsPerThreadgroup: groupSize
+        )
       }
       encoder.endEncoding()
       commandBuffer.commit()
@@ -284,11 +292,11 @@ private func profileProblemSize(
   // Choose an error threshold.
   func createErrorThreshold(precision: GEMMOperandPrecision) -> Float {
     switch precision {
-    case .FP32: return 1e-5
-    case .FP16: return 5e-3
-    case .BF16: return 5e-2
-    case .INT8: return 1e-1
-    case .INT4: return 5e-1
+    case .FP32: 1e-5
+    case .FP16: 5e-3
+    case .BF16: 5e-2
+    case .INT8: 1e-1
+    case .INT4: 5e-1
     }
   }
   var errorThreshold: Float = 0
@@ -340,11 +348,10 @@ private func profileProblemSize(
       }
 
       // Find the actual result.
-      var actual: Float
-      if descriptor.transposeState!.A {
-        actual = C[n * problemSize + m]
+      var actual: Float = if descriptor.transposeState!.A {
+        C[n * problemSize + m]
       } else {
-        actual = C[m * problemSize + n]
+        C[m * problemSize + n]
       }
 
       // Report whether it is correct.

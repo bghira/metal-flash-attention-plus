@@ -1,5 +1,5 @@
 //
-//  CoreCount.swift
+//  GEMMDescriptor+CoreCount.swift
 //  FlashAttention
 //
 //  Created by Philip Turner on 6/21/24.
@@ -25,10 +25,12 @@
     do {
       let io_registry_error =
         IOServiceGetMatchingServices(
-          kIOMainPortDefault, matchingDict, &iterator)
+          kIOMainPortDefault, matchingDict, &iterator
+        )
       guard io_registry_error == 0 else {
         fatalError(
-          "Encountered IORegistry error code \(io_registry_error)")
+          "Encountered IORegistry error code \(io_registry_error)"
+        )
       }
     }
 
@@ -38,7 +40,8 @@
     // Check if the entry is valid
     if gpuEntry == MACH_PORT_NULL {
       fatalError(
-        "Error getting GPU entry at \(#file):\(#line - 5)")
+        "Error getting GPU entry at \(#file):\(#line - 5)"
+      )
     }
 
     // Release the iterator
@@ -46,14 +49,16 @@
 
     // Get the "gpu-core-count" property from gpuEntry
     let key = "gpu-core-count"
-    let options: IOOptionBits = 0  // No options needed
+    let options: IOOptionBits = 0 // No options needed
     let gpuCoreCount = IORegistryEntrySearchCFProperty(
-      gpuEntry, kIOServicePlane, key as CFString, nil, options)
+      gpuEntry, kIOServicePlane, key as CFString, nil, options
+    )
 
     // Check if the property is valid
     if gpuCoreCount == nil {
       fatalError(
-        "Error getting gpu-core-count property at \(#file):\(#line - 6)")
+        "Error getting gpu-core-count property at \(#file):\(#line - 6)"
+      )
     }
 
     // Cast the property to CFNumberRef
@@ -63,7 +68,8 @@
     let type = CFNumberGetType(gpuCoreCountNumber)
     if type != .sInt64Type {
       fatalError(
-        "Error: gpu-core-count is not sInt64 at \(#file):\(#line - 3)")
+        "Error: gpu-core-count is not sInt64 at \(#file):\(#line - 3)"
+      )
     }
 
     // Get the value of the number as Int64
@@ -73,7 +79,8 @@
     // Check for errors
     if result == false {
       fatalError(
-        " Error getting value of gpu-core-count at \(#file):\(#line - 5)")
+        " Error getting value of gpu-core-count at \(#file):\(#line - 5)"
+      )
     }
 
     return Int(value)

@@ -21,7 +21,7 @@ GEMMKernel::GEMMKernel(GEMMKernelDescriptor descriptor) {
   auto transposeState = descriptor.transposeState.value();
   this->blockDimensions = blockDimensions;
   this->threadgroupSize = 32 * splits[0] * splits[1];
-  
+
   // Validate the correctness of register precisions.
   auto checkOperandPair =
   [=](GEMMOperandPrecision memory, GEMMOperandPrecision register_) -> bool {
@@ -60,7 +60,7 @@ GEMMKernel::GEMMKernel(GEMMKernelDescriptor descriptor) {
       return false;
     }
   };
-  
+
   CCV_NNC_MFA_PRECONDITION
   (checkOperandPair(memoryPrecisions.A, registerPrecisions.A));
   CCV_NNC_MFA_PRECONDITION
@@ -73,13 +73,13 @@ GEMMKernel::GEMMKernel(GEMMKernelDescriptor descriptor) {
     // down execution speed on both M1/M2 and M3+.
     CCV_NNC_MFA_PRECONDITION(false);
   }
-  
+
   // Inject the contents of the headers.
   source += createMetalSimdgroupEvent() + "\n";
   source += createMetalSimdgroupMatrixStorage() + "\n";
   source += "using namespace metal;\n";
   source += "\n";
-  
+
   // Declare the size of M and N within a register allocation.
   {
     uint16_t registerM = blockDimensions[0] / splits[0];
@@ -87,7 +87,7 @@ GEMMKernel::GEMMKernel(GEMMKernelDescriptor descriptor) {
     source += "#define REGISTER_M " + std::to_string(registerM) + "\n";
     source += "#define REGISTER_N " + std::to_string(registerN) + "\n";
   }
-  
+
   // Retrieve the "padded" block dimensions, otherwise compute analytically
   // from the true block dimensions.
   simd::ushort2 paddedBlockDimensionsA; // (M, K)
@@ -95,7 +95,7 @@ GEMMKernel::GEMMKernel(GEMMKernelDescriptor descriptor) {
   simd::ushort2 paddedBlockDimensionsC; // (M, N)
   if (descriptor.paddedBlockDimensions.has_value()) {
     auto paddedBlockDimensions = descriptor.paddedBlockDimensions.value();
-    
+
     paddedBlockDimensionsA = {
       paddedBlockDimensions[0], paddedBlockDimensions[1]
     };
@@ -113,7 +113,7 @@ GEMMKernel::GEMMKernel(GEMMKernelDescriptor descriptor) {
     paddedBlockDimensionsB = { blockDimensionK, blockDimensionN };
     paddedBlockDimensionsC = { blockDimensionM, blockDimensionN };
   }
-  
+
   // Determine the block dimensions from the transpose state.
   std::string leadingDimensionA;
   std::string leadingDimensionB;
@@ -139,7 +139,7 @@ GEMMKernel::GEMMKernel(GEMMKernelDescriptor descriptor) {
   source += std::to_string(leadingBlockDimensionA) + "\n";
   source += "#define LEADING_BLOCK_DIMENSION_B ";
   source += std::to_string(leadingBlockDimensionB) + "\n";
-  
+
   // Add the function constants.
   source += R"(
 // Dimensions of each matrix.
@@ -174,14 +174,14 @@ constant uint N [[function_constant(1)]];
 constant uint K [[function_constant(2)]];
 
 )";
-  
+
   // Whether each matrix is transposed.
   source += "constant bool A_trans = ";
   source += std::to_string(bool(transposeState[0])) + ";\n";
   source += "constant bool B_trans = ";
   source += std::to_string(bool(transposeState[1])) + ";\n";
   source += "\n";
-  
+
   // Define the memory layout of the matrix block.
   source += "constant ushort M_group = ";
   source += std::to_string(blockDimensions[0]) + ";\n";
@@ -190,12 +190,12 @@ constant uint K [[function_constant(2)]];
   source += "constant ushort K_group = ";
   source += std::to_string(blockDimensions[2]) + ";\n";
   source += "\n";
-  
+
   // Thresholds that mark the matrix edge.
   source += "constant uint M_edge = M - (M % M_group);\n";
   source += "constant uint N_edge = N - (N % N_group);\n";
   source += "\n";
-  
+
   // Find the number of elements in the final block. If the matrix
   // dimensions are perfectly divisibly by block dimensions, we don't want
   // this value to be zero. The final block is a full block.
@@ -207,13 +207,13 @@ constant uint K [[function_constant(2)]];
   source += "  ? K_group : K % K_group;\n";
   source += "constant ushort K_remainder_padded = ";
   source += "(K_remainder + 7) / 8 * 8;\n";
-  
+
   // Shift the final block, so it doesn't access out-of-bounds memory.
   source += "constant ushort M_shift = (M < M_group) ";
   source += "? 0 : REGISTER_M - M_remainder;\n";
   source += "constant ushort N_shift = (N < N_group) ";
   source += "? 0 : REGISTER_N - N_remainder;\n";
-  
+
   {
     // Allocate threadgroup memory, using the 'memory precision'. This memory
     // is allocated at runtime, either by the user (explicit API call) or by
@@ -224,7 +224,7 @@ constant uint K [[function_constant(2)]];
     source += "#define MEMORY_NAME_A " + memoryNameA + "\n";
     source += "#define MEMORY_NAME_B " + memoryNameB + "\n";
     source += "#define MEMORY_NAME_C " + memoryNameC + "\n";
-    
+
     // Allocate thread memory, using the 'register precision'. This memory
     // is allocated by embedding the precision into the assembly code.
     std::string registerNameA = registerPrecisions.A.name();
@@ -234,7 +234,7 @@ constant uint K [[function_constant(2)]];
     source += "#define REGISTER_NAME_B " + registerNameB + "\n";
     source += "#define REGISTER_NAME_C " + registerNameC + "\n";
   }
-  
+
   // Add the utility functions.
   source += R"(
 // Indexes into an array of registers.
@@ -251,7 +251,7 @@ METAL_FUNC thread simdgroup_matrix_storage<T>* get_sram(
   return sram + (matrix_origin.y / 8) * (sram_leading_dim / 8) + (matrix_origin.x / 8);
 }
 )";
-  
+
   struct MultiplyDescriptor {
     std::optional<std::string> addressSpace;
     std::optional<std::string> leadingDimensionA;
@@ -259,8 +259,8 @@ METAL_FUNC thread simdgroup_matrix_storage<T>* get_sram(
     std::optional<std::string> loadFunctionA;
     std::optional<std::string> loadFunctionB;
   };
-  
-  auto createMultiply = 
+
+  auto createMultiply =
   [=](MultiplyDescriptor descriptor) -> std::string {
     CCV_NNC_MFA_PRECONDITION(descriptor.addressSpace.has_value());
     CCV_NNC_MFA_PRECONDITION(descriptor.leadingDimensionA.has_value());
@@ -272,7 +272,7 @@ METAL_FUNC thread simdgroup_matrix_storage<T>* get_sram(
     auto leadingDimensionB = descriptor.leadingDimensionB.value();
     auto loadFunctionA = descriptor.loadFunctionA.value();
     auto loadFunctionB = descriptor.loadFunctionB.value();
-    
+
     std::string output;
     output += R"(
 // One multiply-accumulate loop iteration, or 8 dot products.
@@ -318,7 +318,7 @@ METAL_FUNC void multiply_accumulate(
 )";
     return output;
   };
-  
+
   // Add the utility functions for the multiply-accumulate inner loop.
   {
     MultiplyDescriptor multiplyDesc;
@@ -334,18 +334,18 @@ METAL_FUNC void multiply_accumulate(
     } else {
       multiplyDesc.loadFunctionB = "load";
     }
-    
+
     multiplyDesc.addressSpace = "device";
     multiplyDesc.leadingDimensionA = leadingDimensionA;
     multiplyDesc.leadingDimensionB = leadingDimensionB;
     source += createMultiply(multiplyDesc);
-    
+
     multiplyDesc.addressSpace = "threadgroup";
     multiplyDesc.leadingDimensionA = std::to_string(leadingBlockDimensionA);
     multiplyDesc.leadingDimensionB = std::to_string(leadingBlockDimensionB);
     source += createMultiply(multiplyDesc);
   }
-  
+
   // Add the setup portion where the addresses are prepared.
   {
     uint16_t blockBytesA =
@@ -354,17 +354,17 @@ METAL_FUNC void multiply_accumulate(
     paddedBlockDimensionsB[0] * paddedBlockDimensionsB[1];
     uint16_t blockBytesC =
     paddedBlockDimensionsC[0] * paddedBlockDimensionsC[1];
-    
+
     blockBytesA *= uint16_t(memoryPrecisions.A.size());
     blockBytesB *= uint16_t(memoryPrecisions.B.size());
     blockBytesC *= uint16_t(memoryPrecisions.C.size());
     threadgroupMemoryAllocation = std::max
     (uint16_t(blockBytesA + blockBytesB), blockBytesC);
-    
+
     source += "\n";
     source += "#define BLOCK_BYTES_A " + std::to_string(blockBytesA) + "\n";
     source += "#define SPLITS_N " + std::to_string(splits[1]) + "\n";
-    
+
     source += R"(
 
 // Metal function arguments.
@@ -392,9 +392,9 @@ METAL_FUNC void multiply_accumulate(
 kernel void gemm(device MEMORY_NAME_A *A [[buffer(0)]],
                  device MEMORY_NAME_B *B [[buffer(1)]],
                  device MEMORY_NAME_C *C [[buffer(2)]],
-                 
+
                  threadgroup uchar *threadgroup_block [[threadgroup(0)]],
-                 
+
                  uint3 gid [[threadgroup_position_in_grid]],
                  ushort sidx [[simdgroup_index_in_threadgroup]],
                  ushort lane_id [[thread_index_in_simdgroup]])
@@ -403,7 +403,7 @@ kernel void gemm(device MEMORY_NAME_A *A [[buffer(0)]],
   auto B_block = (threadgroup MEMORY_NAME_B*)(threadgroup_block + BLOCK_BYTES_A);
   ushort2 sid(sidx % SPLITS_N, sidx / SPLITS_N);
   ushort2 morton_offset = morton_order(lane_id);
-  
+
   // Return early if the SIMD is out of bounds.
   //
   // There could be some threadgroups where the matrix edge cuts straight
@@ -420,7 +420,7 @@ kernel void gemm(device MEMORY_NAME_A *A [[buffer(0)]],
   }
   ushort2 offset_in_group(sid.x * REGISTER_N + morton_offset.x,
                           sid.y * REGISTER_M + morton_offset.y);
-  
+
   // Shift the matrix block within bounds, if possible.
   if ((M_shift != 0) && (gid.y * M_group >= M_edge)) {
     M_offset -= M_shift;
@@ -430,7 +430,7 @@ kernel void gemm(device MEMORY_NAME_A *A [[buffer(0)]],
   }
 )";
   }
-  
+
   // Add the setup of the accumulator.
   source += R"(
   simdgroup_matrix_storage<REGISTER_NAME_C> C_sram[
@@ -447,7 +447,7 @@ kernel void gemm(device MEMORY_NAME_A *A [[buffer(0)]],
     }
   }
 )";
-  
+
   // Add the matrix multiplication iterations.
   //
   // Async copies are required for correct behavior in edge cases. We attempt
@@ -463,7 +463,7 @@ kernel void gemm(device MEMORY_NAME_A *A [[buffer(0)]],
     std::string paddedCeilingK = "(K + K_remainder_padded - K_remainder)";
     source += "#define ASYNC_ITERATIONS_START " + asyncIterationsStart + "\n";
     source += "#define PADDED_CEILING_K " + paddedCeilingK + "\n";
-    
+
     source += R"(
 
 // Perform the iterations where async copy is avoided.
@@ -472,7 +472,7 @@ for (uint k = 0; k < ASYNC_ITERATIONS_START; k += 8) {
   uint2 B_offset(N_offset, k);
   A_offset += uint2(morton_offset.x, offset_in_group.y);
   B_offset += uint2(offset_in_group.x, morton_offset.y);
-  
+
   auto A_src = simdgroup_matrix_storage<MEMORY_NAME_A>::apply_offset(
     A, LEADING_DIMENSION_A, A_offset, A_trans);
   auto B_src = simdgroup_matrix_storage<MEMORY_NAME_B>::apply_offset(
@@ -542,10 +542,10 @@ for (uint k = ASYNC_ITERATIONS_START; k < K; k += K_group) {
     threadgroup_barrier(mem_flags::mem_threadgroup);
   }
 }
-  
+
 )";
   }
-  
+
   // Add the cleanup portion where the accumulator is stored.
   {
     std::string storeFunctionC;
@@ -555,14 +555,14 @@ for (uint k = ASYNC_ITERATIONS_START; k < K; k += K_group) {
     } else {
       storeFunctionC = "store";
     }
-    
+
     std::string condition;
     if (preferAsyncStore) {
       condition = "false";
     } else {
       condition = "(M >= M_group) && (N >= N_group)";
     }
-    
+
     source += "if (" + condition + ") {";
     source += R"(
     // Fast path for matrices that qualify.
@@ -570,7 +570,7 @@ for (uint k = ASYNC_ITERATIONS_START; k < K; k += K_group) {
                    M_offset + offset_in_group.y);
     auto C_dst = simdgroup_matrix_storage<MEMORY_NAME_C>::apply_offset(
       C, N, C_offset);
-    
+
     // Write the accumulator to device memory.
   #pragma clang loop unroll(full)
     for (ushort m = 0; m < REGISTER_M; m += 8) {
@@ -589,7 +589,7 @@ for (uint k = ASYNC_ITERATIONS_START; k < K; k += K_group) {
     auto C_block_dst = simdgroup_matrix_storage<MEMORY_NAME_C>::apply_offset(
       C_block, N_group, offset_in_group);
     threadgroup_barrier(mem_flags::mem_threadgroup);
-    
+
     // Write the accumulator to threadgroup memory.
   #pragma clang loop unroll(full)
     for (ushort m = 0; m < REGISTER_M; m += 8) {
@@ -603,7 +603,7 @@ for (uint k = ASYNC_ITERATIONS_START; k < K; k += K_group) {
       }
     }
     threadgroup_barrier(mem_flags::mem_threadgroup);
-    
+
     // Launch the async copy from threadgroup to device memory.
     if (sidx == 0) {
       uint2 C_offset(gid.x * N_group, gid.y * M_group);
@@ -611,7 +611,7 @@ for (uint k = ASYNC_ITERATIONS_START; k < K; k += K_group) {
                      min(uint(M_group), M - C_offset.y));
       auto C_dst = simdgroup_matrix_storage<MEMORY_NAME_C>::apply_offset(
         C, N, C_offset);
-      
+
       // If we shift successfully, the garbage zone moves from the bottom right
       // to the top left.
       if ((M_shift != 0) || (N_shift != 0)) {
@@ -625,17 +625,17 @@ for (uint k = ASYNC_ITERATIONS_START; k < K; k += K_group) {
         C_block = simdgroup_matrix_storage<MEMORY_NAME_C>::apply_offset(
           C_block, N_group, C_block_shift);
       }
-      
+
       simdgroup_event event;
       event.async_copy(C_dst, N, C_tile, C_block, N_group, C_tile);
     }
   }
 )";
   }
-  
+
   // Add the final closing brace of the Metal function.
   source += "}\n";
-  
+
   // Compile the shader source.
   {
     auto string = NS::String::string(source.c_str(), NS::UTF8StringEncoding);

@@ -179,9 +179,7 @@ public struct GEMMKernelDescriptor {
   /// Required. Whether each of the inputs deviates from row-major order.
   public var transposeState: (A: Bool, B: Bool)?
 
-  public init() {
-
-  }
+  public init() {}
 }
 
 struct GEMMKernelKey: Equatable, Hashable {
@@ -197,7 +195,8 @@ struct GEMMKernelKey: Equatable, Hashable {
   init(copying source: GEMMKernelDescriptor) {
     blockDimensions = Self.createBlockDimensions(source.blockDimensions)
     leadingBlockDimensions = Self.createBlockDimensions(
-      source.leadingBlockDimensions)
+      source.leadingBlockDimensions
+    )
     memoryPrecisions = Self.createPrecisions(source.memoryPrecisions)
     preferAsyncLoad = Self.createBoolean(source.preferAsyncLoad)
     preferAsyncStore = Self.createBoolean(source.preferAsyncStore)
@@ -211,51 +210,60 @@ struct GEMMKernelKey: Equatable, Hashable {
     transposeState = Self.createTransposeState(source.transposeState)
   }
 
-  @_transparent  // performance in -Ounchecked
+  @_transparent // performance in -Ounchecked
   static func createBlockDimensions(
     _ input: (UInt16, UInt16, UInt16)?
-  ) -> SIMD3<UInt16> {
+  )
+    -> SIMD3<UInt16>
+  {
     if let input {
-      return SIMD3(input.0, input.1, input.2)
+      SIMD3(input.0, input.1, input.2)
     } else {
-      return SIMD3(repeating: .max)
+      SIMD3(repeating: .max)
     }
   }
 
-  @_transparent  // performance in -Ounchecked
+  @_transparent // performance in -Ounchecked
   static func createBoolean(
     _ input: Bool?
-  ) -> UInt8 {
+  )
+    -> UInt8
+  {
     if let input {
-      return input ? 1 : 0
+      input ? 1 : 0
     } else {
-      return UInt8.max
+      UInt8.max
     }
   }
 
-  @_transparent  // performance in -Ounchecked
+  @_transparent // performance in -Ounchecked
   static func createPrecisions(
     _ input: (
       GEMMOperandPrecision, GEMMOperandPrecision, GEMMOperandPrecision
     )?
-  ) -> SIMD3<UInt16> {
+  )
+    -> SIMD3<UInt16>
+  {
     if let input {
-      return SIMD3(input.0.rawValue, input.1.rawValue, input.2.rawValue)
+      SIMD3(input.0.rawValue, input.1.rawValue, input.2.rawValue)
     } else {
-      return SIMD3(repeating: .max)
+      SIMD3(repeating: .max)
     }
   }
 
-  @_transparent  // performance in -Ounchecked
+  @_transparent // performance in -Ounchecked
   static func createTransposeState(
     _ input: (Bool, Bool)?
-  ) -> SIMD2<UInt8> {
+  )
+    -> SIMD2<UInt8>
+  {
     if let input {
-      return SIMD2(
+      SIMD2(
         input.0 ? 1 : 0,
-        input.1 ? 1 : 0)
+        input.1 ? 1 : 0
+      )
     } else {
-      return SIMD2(repeating: .max)
+      SIMD2(repeating: .max)
     }
   }
 }
@@ -264,7 +272,9 @@ extension GEMMKernelDescriptor: Hashable, Equatable {
   public static func == (
     lhs: GEMMKernelDescriptor,
     rhs: GEMMKernelDescriptor
-  ) -> Bool {
+  )
+    -> Bool
+  {
     let lhsKey = GEMMKernelKey(copying: lhs)
     let rhsKey = GEMMKernelKey(copying: rhs)
     return lhsKey == rhsKey

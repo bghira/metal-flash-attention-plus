@@ -49,14 +49,16 @@ private func validateSlidingWindow(
   let functionConstants = MTLFunctionConstantValues()
   attentionDesc.setFunctionConstants(functionConstants)
   let function = try! library.makeFunction(
-    name: "attention", constantValues: functionConstants)
+    name: "attention", constantValues: functionConstants
+  )
 
   // Test that pipeline can be created
   let pipelineDesc = MTLComputePipelineDescriptor()
   pipelineDesc.computeFunction = function
   pipelineDesc.maxTotalThreadsPerThreadgroup = 1024
-  let _ = try! device.makeComputePipelineState(
-    descriptor: pipelineDesc, options: [], reflection: nil)
+  _ = try! device.makeComputePipelineState(
+    descriptor: pipelineDesc, options: [], reflection: nil
+  )
 
   print(
     "Sliding window attention (window=\(windowSize), seq=\(sequenceDimension), head=\(headDimension)) compiled successfully"
@@ -91,14 +93,16 @@ private func validateCausal(
   let functionConstants = MTLFunctionConstantValues()
   attentionDesc.setFunctionConstants(functionConstants)
   let function = try! library.makeFunction(
-    name: "attention", constantValues: functionConstants)
+    name: "attention", constantValues: functionConstants
+  )
 
   // Test that pipeline can be created
   let pipelineDesc = MTLComputePipelineDescriptor()
   pipelineDesc.computeFunction = function
   pipelineDesc.maxTotalThreadsPerThreadgroup = 1024
-  let _ = try! device.makeComputePipelineState(
-    descriptor: pipelineDesc, options: [], reflection: nil)
+  _ = try! device.makeComputePipelineState(
+    descriptor: pipelineDesc, options: [], reflection: nil
+  )
 
   print("Causal attention (seq=\(sequenceDimension), head=\(headDimension)) compiled successfully")
 }
@@ -130,13 +134,15 @@ private func validateCompilation(
   let functionConstants = MTLFunctionConstantValues()
   attentionDesc.setFunctionConstants(functionConstants)
   let function = try! library.makeFunction(
-    name: "attention", constantValues: functionConstants)
+    name: "attention", constantValues: functionConstants
+  )
 
   let pipelineDesc = MTLComputePipelineDescriptor()
   pipelineDesc.computeFunction = function
   pipelineDesc.maxTotalThreadsPerThreadgroup = 1024
-  let _ = try! device.makeComputePipelineState(
-    descriptor: pipelineDesc, options: [], reflection: nil)
+  _ = try! device.makeComputePipelineState(
+    descriptor: pipelineDesc, options: [], reflection: nil
+  )
 
   print("Basic attention (seq=\(sequenceDimension), head=\(headDimension)) compiled successfully")
 }

@@ -78,7 +78,8 @@ struct Network {
   var dO: [Float]
 
   init(descriptor: NetworkDescriptor) {
-    guard let rowDimension = descriptor.rowDimension,
+    guard
+      let rowDimension = descriptor.rowDimension,
       let columnDimension = descriptor.columnDimension,
       let headDimension = descriptor.headDimension
     else {
@@ -126,7 +127,8 @@ struct Network {
 
     return SIMD2(
       magnitudePart * cosPart,
-      magnitudePart * sinPart)
+      magnitudePart * sinPart
+    )
   }
 }
 
@@ -329,7 +331,8 @@ extension Network {
   // Compute ∂Φ/∂V analytically.
   func derivativeV() -> [Float] {
     var output = [Float](
-      repeating: .zero, count: columnDimension * headDimension)
+      repeating: .zero, count: columnDimension * headDimension
+    )
 
     // P^T * dO
     for rowID in 0..<rowDimension {
@@ -352,7 +355,8 @@ extension Network {
   // Compute ∂Φ/∂K analytically.
   func derivativeK() -> [Float] {
     var output = [Float](
-      repeating: .zero, count: columnDimension * headDimension)
+      repeating: .zero, count: columnDimension * headDimension
+    )
 
     // dS^T * Q
     for rowID in 0..<rowDimension {
@@ -375,7 +379,8 @@ extension Network {
   // Compute ∂Φ/∂Q analytically.
   func derivativeQ() -> [Float] {
     var output = [Float](
-      repeating: .zero, count: rowDimension * headDimension)
+      repeating: .zero, count: rowDimension * headDimension
+    )
 
     // dS * K
     for rowID in 0..<rowDimension {

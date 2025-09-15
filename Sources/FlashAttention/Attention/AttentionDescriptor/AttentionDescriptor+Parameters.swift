@@ -12,24 +12,23 @@ import Metal
 extension AttentionDescriptor {
   func parameterFile(type: AttentionKernelType) -> String {
     // Choose a function pointer for the parameters.
-    var createParameters: (MTLDevice) -> String
-    if lowPrecisionInputs && lowPrecisionIntermediates {
+    var createParameters: (MTLDevice) -> String = if lowPrecisionInputs, lowPrecisionIntermediates {
       switch type {
       case .forward:
-        createParameters = Self.forwardMixed(device:)
+        Self.forwardMixed(device:)
       case .backwardQuery:
-        createParameters = Self.backwardQueryMixed(device:)
+        Self.backwardQueryMixed(device:)
       case .backwardKeyValue:
-        createParameters = Self.backwardKeyValueMixed(device:)
+        Self.backwardKeyValueMixed(device:)
       }
     } else {
       switch type {
       case .forward:
-        createParameters = Self.forward(device:)
+        Self.forward(device:)
       case .backwardQuery:
-        createParameters = Self.backwardQuery(device:)
+        Self.backwardQuery(device:)
       case .backwardKeyValue:
-        createParameters = Self.backwardKeyValue(device:)
+        Self.backwardKeyValue(device:)
       }
     }
 
@@ -39,7 +38,7 @@ extension AttentionDescriptor {
   }
 
   func row(table: [AttentionParameterRow]) -> AttentionParameterRow {
-    guard let matrixDimensions = self.matrixDimensions else {
+    guard let matrixDimensions else {
       fatalError("Descriptor was incomplete.")
     }
     let headDimension = matrixDimensions.head
@@ -76,15 +75,15 @@ extension AttentionDescriptor {
   /// parameters do not generalize.
   static func defaultParameters(device: MTLDevice) -> String {
     if device.supportsFamily(.apple9) {
-      return """
-        | 0   | 16 | 128 | 16 |      |
+      """
+      | 0   | 16 | 128 | 16 |      |
 
-        """
+      """
     } else {
-      return """
-        | 0   | 32 | 80  | 16 |      |
+      """
+      | 0   | 32 | 80  | 16 |      |
 
-        """
+      """
     }
   }
 
@@ -105,21 +104,21 @@ extension AttentionDescriptor {
   /// ```
   static func forwardMixed(device: MTLDevice) -> String {
     if device.supportsFamily(.apple9) {
-      return """
-        | 32  | 16 | 128 | 16 | Q, O |
-        | 96  | 16 | 128 | 32 | Q, O |
-        | 160 | 16 | 128 | 32 | O    |
-        | 224 | 16 | 128 | 32 | Q    |
-        | 384 | 16 | 128 | 32 |      |
+      """
+      | 32  | 16 | 128 | 16 | Q, O |
+      | 96  | 16 | 128 | 32 | Q, O |
+      | 160 | 16 | 128 | 32 | O    |
+      | 224 | 16 | 128 | 32 | Q    |
+      | 384 | 16 | 128 | 32 |      |
 
-        """
+      """
     } else {
-      return """
-        | 96  | 32 | 128 | 32 | Q, O |
-        | 128 | 32 | 128 | 32 | Q    |
-        | 384 | 32 | 128 | 32 |      |
+      """
+      | 96  | 32 | 128 | 32 | Q, O |
+      | 128 | 32 | 128 | 32 | Q    |
+      | 384 | 32 | 128 | 32 |      |
 
-        """
+      """
     }
   }
 
@@ -128,22 +127,22 @@ extension AttentionDescriptor {
   /// If any of the operands is FP16, the parameters will fail to generalize.
   static func forward(device: MTLDevice) -> String {
     if device.supportsFamily(.apple9) {
-      return """
-        | 8   | 16 | 128 | 16 | Q, O |
-        | 16  | 16 | 64  | 16 | Q, O |
-        | 48  | 16 | 32  | 8  | Q, O |
-        | 192 | 16 | 64  | 16 | O    |
-        | 384 | 16 | 128 | 16 |      |
+      """
+      | 8   | 16 | 128 | 16 | Q, O |
+      | 16  | 16 | 64  | 16 | Q, O |
+      | 48  | 16 | 32  | 8  | Q, O |
+      | 192 | 16 | 64  | 16 | O    |
+      | 384 | 16 | 128 | 16 |      |
 
-        """
+      """
     } else {
-      return """
-        | 24  | 32 | 64 | 24 | Q, O |
-        | 32  | 32 | 64 | 32 | O    |
-        | 56  | 32 | 32 | 56 | O    |
-        | 384 | 32 | 80 | 16 |      |
+      """
+      | 24  | 32 | 64 | 24 | Q, O |
+      | 32  | 32 | 64 | 32 | O    |
+      | 56  | 32 | 32 | 56 | O    |
+      | 384 | 32 | 80 | 16 |      |
 
-        """
+      """
     }
   }
 }
@@ -171,19 +170,19 @@ extension AttentionDescriptor {
   /// ```
   static func backwardQueryMixed(device: MTLDevice) -> String {
     if device.supportsFamily(.apple9) {
-      return """
-        | 80  | 16 | 64  | 8  | Q, dO, dQ |
-        | 192 | 16 | 64  | 32 | Q, dQ     |
-        | 384 | 16 | 128 | 32 |           |
+      """
+      | 80  | 16 | 64  | 8  | Q, dO, dQ |
+      | 192 | 16 | 64  | 32 | Q, dQ     |
+      | 384 | 16 | 128 | 32 |           |
 
-        """
+      """
     } else {
-      return """
-        | 32  | 32 | 64 | 32 | Q, dQ |
-        | 96  | 32 | 64 | 32 | dQ    |
-        | 384 | 32 | 64 | 32 |       |
+      """
+      | 32  | 32 | 64 | 32 | Q, dQ |
+      | 96  | 32 | 64 | 32 | dQ    |
+      | 384 | 32 | 64 | 32 |       |
 
-        """
+      """
     }
   }
 
@@ -193,21 +192,21 @@ extension AttentionDescriptor {
   /// generalize.
   static func backwardQuery(device: MTLDevice) -> String {
     if device.supportsFamily(.apple9) {
-      return """
-        | 16  | 16 | 64  | 8  | Q, dO, dQ |
-        | 32  | 16 | 64  | 16 | Q, dQ     |
-        | 192 | 16 | 64  | 32 | Q, dQ     |
-        | 384 | 16 | 128 | 16 |           |
+      """
+      | 16  | 16 | 64  | 8  | Q, dO, dQ |
+      | 32  | 16 | 64  | 16 | Q, dQ     |
+      | 192 | 16 | 64  | 32 | Q, dQ     |
+      | 384 | 16 | 128 | 16 |           |
 
-        """
+      """
     } else {
-      return """
-        | 16  | 32 | 64 | 16 | Q, dQ |
-        | 32  | 32 | 64 | 32 | dQ    |
-        | 56  | 32 | 64 | 24 | dQ    |
-        | 384 | 32 | 80 | 16 |       |
+      """
+      | 16  | 32 | 64 | 16 | Q, dQ |
+      | 32  | 32 | 64 | 32 | dQ    |
+      | 56  | 32 | 64 | 24 | dQ    |
+      | 384 | 32 | 80 | 16 |       |
 
-        """
+      """
     }
   }
 }
@@ -238,23 +237,23 @@ extension AttentionDescriptor {
   /// ```
   static func backwardKeyValueMixed(device: MTLDevice) -> String {
     if device.supportsFamily(.apple9) {
-      return """
-        | 56  | 16 | 64  | 8  | K, V, dV, dK |
-        | 80  | 16 | 32  | 16 | V, dV, dK    |
-        | 144 | 16 | 128 | 16 | dV, dK       |
-        | 224 | 16 | 128 | 16 | dV           |
-        | 384 | 16 | 128 | 32 |              |
+      """
+      | 56  | 16 | 64  | 8  | K, V, dV, dK |
+      | 80  | 16 | 32  | 16 | V, dV, dK    |
+      | 144 | 16 | 128 | 16 | dV, dK       |
+      | 224 | 16 | 128 | 16 | dV           |
+      | 384 | 16 | 128 | 32 |              |
 
-        """
+      """
     } else {
-      return """
-        | 16  | 32 | 64 | 16 | V, dV, dK |
-        | 32  | 32 | 64 | 32 | dV, dK    |
-        | 56  | 32 | 80 | 32 | dV        |
-        | 96  | 32 | 64 | 32 | dV        |
-        | 384 | 32 | 64 | 32 |           |
+      """
+      | 16  | 32 | 64 | 16 | V, dV, dK |
+      | 32  | 32 | 64 | 32 | dV, dK    |
+      | 56  | 32 | 80 | 32 | dV        |
+      | 96  | 32 | 64 | 32 | dV        |
+      | 384 | 32 | 64 | 32 |           |
 
-        """
+      """
     }
   }
 
@@ -264,23 +263,23 @@ extension AttentionDescriptor {
   /// generalize.
   static func backwardKeyValue(device: MTLDevice) -> String {
     if device.supportsFamily(.apple9) {
-      return """
-        | 16  | 16 | 64  | 8  | K, V, dV, dK |
-        | 32  | 16 | 32  | 16 | K, V, dV, dK |
-        | 64  | 16 | 32  | 16 | V, dV, dK    |
-        | 128 | 16 | 128 | 16 | dV, dK       |
-        | 160 | 16 | 128 | 16 | dV           |
-        | 384 | 16 | 128 | 16 |              |
+      """
+      | 16  | 16 | 64  | 8  | K, V, dV, dK |
+      | 32  | 16 | 32  | 16 | K, V, dV, dK |
+      | 64  | 16 | 32  | 16 | V, dV, dK    |
+      | 128 | 16 | 128 | 16 | dV, dK       |
+      | 160 | 16 | 128 | 16 | dV           |
+      | 384 | 16 | 128 | 16 |              |
 
-        """
+      """
     } else {
-      return """
-        | 16  | 32 | 32 | 16 | V, dV, dK |
-        | 24  | 32 | 64 | 24 | dV, dK    |
-        | 56  | 32 | 80 | 16 | dV        |
-        | 384 | 32 | 80 | 16 |           |
+      """
+      | 16  | 32 | 32 | 16 | V, dV, dK |
+      | 24  | 32 | 64 | 24 | dV, dK    |
+      | 56  | 32 | 80 | 16 | dV        |
+      | 384 | 32 | 80 | 16 |           |
 
-        """
+      """
     }
   }
 }

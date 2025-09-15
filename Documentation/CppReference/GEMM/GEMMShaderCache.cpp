@@ -17,14 +17,14 @@ GEMMPipelineValue* GEMMShaderCache::fetchKernel(GEMMDescriptor gemmDesc) {
       std::cout << "Pipeline cache miss." << std::endl;
     }
   }
-  
+
   // The caller is not responsible for calling 'delete' on this pointer. The
   // reference is saved in the 'libraryCache'. It will be deallocated whenever
   // the shader cache itself is cleaned up.
   auto createKernel =
   [=](GEMMKernelDescriptor descriptor) -> GEMMKernel* {
     CCV_NNC_MFA_PRECONDITION(descriptor.preferAsyncStore.has_value());
-    
+
     GEMMKernelKey gemmKernelKey(descriptor);
     auto iterator = libraryCache.find(gemmKernelKey);
     if (iterator != libraryCache.end()) {
@@ -32,16 +32,16 @@ GEMMPipelineValue* GEMMShaderCache::fetchKernel(GEMMDescriptor gemmDesc) {
       return iterator->second;
     } else {
       std::cout << "Library cache miss." << std::endl;
-      
+
       GEMMKernel* kernel = new GEMMKernel(descriptor);
       libraryCache[gemmKernelKey] = kernel;
       return kernel;
     }
   };
-  
+
   // Create a MTLDevice object, a function call with very high latency.
   auto device = NS::TransferPtr(MTL::CreateSystemDefaultDevice());
-  
+
   // WARNING: The owner must explicitly retain the compute pipeline.
   auto createPipeline =
   [=](MTL::Library* library) -> MTL::ComputePipelineState* {
@@ -54,21 +54,21 @@ GEMMPipelineValue* GEMMShaderCache::fetchKernel(GEMMDescriptor gemmDesc) {
     constants->setConstantValue(&M, MTL::DataTypeUInt, NS::UInteger(0));
     constants->setConstantValue(&N, MTL::DataTypeUInt, 1);
     constants->setConstantValue(&K, MTL::DataTypeUInt, 2);
-    
+
     std::string cppName = "gemm";
     NS::String* swiftName = NS::String::string
     (cppName.c_str(), NS::UTF8StringEncoding);
     NS::Error* error = nil;
-    
+
     auto function = NS::TransferPtr
     (library->newFunction(swiftName, constants.get(), &error));
     CCV_NNC_MFA_CHECK_ERROR(error);
-    
+
     auto pipeline = device->newComputePipelineState(function.get(), &error);
     CCV_NNC_MFA_CHECK_ERROR(error);
     return pipeline;
   };
-  
+
   // Set the device and examine the block dimensions.
   GEMMKernelDescriptor kernelDesc(gemmDesc);
   kernelDesc.device = device.get();
@@ -83,14 +83,14 @@ GEMMPipelineValue* GEMMShaderCache::fetchKernel(GEMMDescriptor gemmDesc) {
       kernelDesc.preferAsyncStore = true;
     }
   }
-  
-  // Run a combinatorial search to find the correct value for 
+
+  // Run a combinatorial search to find the correct value for
   // 'preferAsyncStore'.
   if (kernelDesc.preferAsyncStore.has_value()) {
     GEMMKernel* kernel = createKernel(kernelDesc);
     auto pipeline = NS::TransferPtr
     (createPipeline(kernel->library.get()));
-    
+
     // Force the user to retrieve the return value from the cache. We ensure
     // the cache takes ownership, and the pointer doesn't become a zombie
     // object.
@@ -103,7 +103,7 @@ GEMMPipelineValue* GEMMShaderCache::fetchKernel(GEMMDescriptor gemmDesc) {
       NS::SharedPtr<MTL::ComputePipelineState> pipeline;
     };
     std::vector<Candidate> candidates;
-    
+
     for (int8_t candidateID = 0; candidateID < 4; ++candidateID) {
       simd::ushort3 blockDimensions;
       if (candidateID % 2 == 0) {
@@ -111,23 +111,23 @@ GEMMPipelineValue* GEMMShaderCache::fetchKernel(GEMMDescriptor gemmDesc) {
       } else {
         blockDimensions = simd::ushort3 { 48, 48, 40 };
       }
-      
+
       bool preferAsyncStore;
       if (candidateID / 2 == 0) {
         preferAsyncStore = false;
       } else {
         preferAsyncStore = true;
       }
-      
+
       // Set the data that's unique to this variant.
       auto newKernelDesc = kernelDesc;
       newKernelDesc.blockDimensions = blockDimensions;
       newKernelDesc.preferAsyncStore = preferAsyncStore;
-      
+
       GEMMKernel* kernel = createKernel(newKernelDesc);
       auto pipeline = NS::TransferPtr
       (createPipeline(kernel->library.get()));
-      
+
       Candidate candidate {
         .kernelDesc = newKernelDesc,
         .kernel = kernel,
@@ -135,14 +135,14 @@ GEMMPipelineValue* GEMMShaderCache::fetchKernel(GEMMDescriptor gemmDesc) {
       };
       candidates.push_back(candidate);
     }
-    
+
     // Find the maximum occupancy.
     int64_t maximumOccupancy = -1;
     for (Candidate candidate : candidates) {
       int64_t occupancy = candidate.pipeline->maxTotalThreadsPerThreadgroup();
       maximumOccupancy = std::max(maximumOccupancy, occupancy);
     }
-    
+
     // Remove all candidates that don't match this occupancy.
     {
       std::vector<Candidate> newCandidates;
@@ -155,11 +155,11 @@ GEMMPipelineValue* GEMMShaderCache::fetchKernel(GEMMDescriptor gemmDesc) {
       }
       candidates = newCandidates;
     }
-    
+
     // Choose the highest-performing candidate.
     Candidate candidate = candidates[candidates.size() - 1];
     kernelDesc = candidate.kernelDesc;
-    
+
     // Force the user to retrieve the return value from the cache. We ensure
     // the cache takes ownership, and the pointer doesn't become a zombie
     // object.

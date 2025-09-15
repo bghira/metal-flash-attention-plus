@@ -13,7 +13,7 @@ void mfa::fatal_error(NS::Error* error, int line, const char *file_name, const c
   auto description = error->localizedDescription();
   auto recovery_suggestion = error->localizedRecoverySuggestion();
   auto failure_reason = error->localizedFailureReason();
-  
+
   log_source_location(line, file_name, function_name);
   std::cerr << "\e[0;1m";
   if (description) {

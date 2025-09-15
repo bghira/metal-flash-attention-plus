@@ -85,7 +85,7 @@ inline Derived safe_cast(Base *base)
 #define NOCOPY(Type)  \
   private: Type(const Type &) DEPRECATED_IN_MAC_OS_X_VERSION_10_0_AND_LATER; \
   void operator = (const Type &) DEPRECATED_IN_MAC_OS_X_VERSION_10_0_AND_LATER;
-  
+
 //
 // Common base of Security exceptions that represent error conditions.
 // All can yield Unix or OSStatus error codes as needed, though *how*
@@ -122,7 +122,7 @@ public:
 //    virtual OSStatus osStatus() const;
     virtual int unixError() const;
     virtual const char *what () const throw ();
-    
+
     static void check(int result)    { if (result == -1) throwMe(); }
     static void throwMe(int err = errno) __attribute__((noreturn));
 
@@ -182,14 +182,14 @@ public:
     Type &operator () ()
     {
         lock();
-        
+
         try
         {
             if (pointer == NULL)
             {
                 pointer = create(make);
             }
-            
+
             unlock();
         }
         catch (...)
@@ -197,10 +197,10 @@ public:
             unlock();
             throw;
         }
-        
+
     return *reinterpret_cast<Type *>(pointer);
     }
-  
+
   // does the object DEFINITELY exist already?
   bool exists() const
   {
@@ -210,7 +210,7 @@ public:
         unlock();
         return result;
   }
-    
+
   // destroy the object (if any) and start over - not really thread-safe
     void reset()
     {
@@ -223,7 +223,7 @@ public:
         }
         unlock();
     }
-    
+
 private:
     static void *make() { return new Type; }
 };
@@ -237,10 +237,10 @@ private:
 class LockingPrimitive {
 protected:
   LockingPrimitive() { }
-  
+
     void check(int err)  { if (err) UnixError::throwMe(err); }
 };
-  
+
 //
 // Mutexi
 //
@@ -253,7 +253,7 @@ public:
     normal,
     recursive
   };
-  
+
     Mutex();              // normal
   Mutex(Type type);          // recursive
   ~Mutex();              // destroy (must be unlocked)
@@ -264,7 +264,7 @@ public:
 private:
     pthread_mutex_t me;
 };
-  
+
 //
 // A guaranteed-unlocker stack-based class.
 // By default, this will use lock/unlock methods, but you can provide your own
@@ -288,7 +288,7 @@ public:
   void release()            { assert(mActive); mActive = false; }
 
   operator const Lock &() const    { return me; }
-  
+
 protected:
   Lock &me;
   bool mActive;

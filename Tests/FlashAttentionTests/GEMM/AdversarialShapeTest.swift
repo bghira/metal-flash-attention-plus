@@ -74,7 +74,8 @@ final class AdversarialShapeTest: XCTestCase {
 
 /// Run a test with the specified configuration.
 private func runCorrectnessTest(descriptor: GEMMDescriptor) {
-  guard let leadingDimensions = descriptor.leadingDimensions,
+  guard
+    let leadingDimensions = descriptor.leadingDimensions,
     let matrixDimensions = descriptor.matrixDimensions,
     let memoryPrecisions = descriptor.memoryPrecisions,
     let transposeState = descriptor.transposeState
@@ -86,32 +87,40 @@ private func runCorrectnessTest(descriptor: GEMMDescriptor) {
     _ transposeState: Bool,
     _ untransposedRows: UInt32,
     _ untransposedColumns: UInt32
-  ) -> UInt32 {
+  )
+    -> UInt32
+  {
     if transposeState {
-      return untransposedColumns
+      untransposedColumns
     } else {
-      return untransposedRows
+      untransposedRows
     }
   }
   let trailingDimensionA = chooseTrailingBlockDimension(
-    transposeState.A, matrixDimensions.M, matrixDimensions.K)
+    transposeState.A, matrixDimensions.M, matrixDimensions.K
+  )
   let trailingDimensionB = chooseTrailingBlockDimension(
-    transposeState.B, matrixDimensions.K, matrixDimensions.N)
+    transposeState.B, matrixDimensions.K, matrixDimensions.N
+  )
   let trailingDimensionC = chooseTrailingBlockDimension(
-    false, matrixDimensions.M, matrixDimensions.N)
+    false, matrixDimensions.M, matrixDimensions.N
+  )
 
   let checkpoint0 = CACurrentMediaTime()
 
   // Set the inputs.
   var operandA = [Float](
     repeating: .zero,
-    count: Int(trailingDimensionA * leadingDimensions.A))
+    count: Int(trailingDimensionA * leadingDimensions.A)
+  )
   var operandB = [Float](
     repeating: .zero,
-    count: Int(trailingDimensionB * leadingDimensions.B))
+    count: Int(trailingDimensionB * leadingDimensions.B)
+  )
   var operandPreviousC = [Float](
     repeating: .zero,
-    count: Int(trailingDimensionC * leadingDimensions.C))
+    count: Int(trailingDimensionC * leadingDimensions.C)
+  )
 
   // Normalize so that every dot product approaches 1.
   let normalizationFactor = 1 / Float(matrixDimensions.K).squareRoot()
@@ -133,7 +142,8 @@ private func runCorrectnessTest(descriptor: GEMMDescriptor) {
   let bufferA = MTLContext.global.createBuffer(operandA, memoryPrecisions.A)
   let bufferB = MTLContext.global.createBuffer(operandB, memoryPrecisions.B)
   let bufferC = MTLContext.global.createBuffer(
-    operandPreviousC, memoryPrecisions.C)
+    operandPreviousC, memoryPrecisions.C
+  )
 
   let checkpoint1 = CACurrentMediaTime()
 
@@ -150,7 +160,8 @@ private func runCorrectnessTest(descriptor: GEMMDescriptor) {
     let encoder = commandBuffer.makeComputeCommandEncoder()!
     encoder.setComputePipelineState(pipeline)
     encoder.setThreadgroupMemoryLength(
-      Int(kernel.threadgroupMemoryAllocation), index: 0)
+      Int(kernel.threadgroupMemoryAllocation), index: 0
+    )
     encoder.setBuffer(bufferA, offset: 0, index: 0)
     encoder.setBuffer(bufferB, offset: 0, index: 1)
     encoder.setBuffer(bufferC, offset: 0, index: 2)
@@ -161,13 +172,16 @@ private func runCorrectnessTest(descriptor: GEMMDescriptor) {
     let gridSize = MTLSize(
       width: ceilDivide(matrixDimensions.N, kernel.blockDimensions.N),
       height: ceilDivide(matrixDimensions.M, kernel.blockDimensions.M),
-      depth: 1)
+      depth: 1
+    )
     let groupSize = MTLSize(
       width: Int(kernel.threadgroupSize),
       height: 1,
-      depth: 1)
+      depth: 1
+    )
     encoder.dispatchThreadgroups(
-      gridSize, threadsPerThreadgroup: groupSize)
+      gridSize, threadsPerThreadgroup: groupSize
+    )
 
     encoder.endEncoding()
     commandBuffer.commit()
@@ -177,7 +191,8 @@ private func runCorrectnessTest(descriptor: GEMMDescriptor) {
   // Copy the GPU output to an array.
   var gpuOperandC = [Float](
     repeating: .zero,
-    count: Int(trailingDimensionC * leadingDimensions.C))
+    count: Int(trailingDimensionC * leadingDimensions.C)
+  )
   do {
     let sourcePointer = bufferC.contents()
     for m in 0..<matrixDimensions.M {
@@ -189,30 +204,30 @@ private func runCorrectnessTest(descriptor: GEMMDescriptor) {
         case .FP32:
           let castedPointer =
             sourcePointer
-            .assumingMemoryBound(to: Float.self)
+              .assumingMemoryBound(to: Float.self)
           sourceValue = castedPointer[Int(address)]
         case .FP16:
           let castedPointer =
             sourcePointer
-            .assumingMemoryBound(to: Float16.self)
+              .assumingMemoryBound(to: Float16.self)
           let sourceValue16 = castedPointer[Int(address)]
           sourceValue = Float(sourceValue16)
         case .BF16:
           let castedPointer =
             sourcePointer
-            .assumingMemoryBound(to: UInt16.self)
+              .assumingMemoryBound(to: UInt16.self)
           let sourceValue16 = castedPointer[Int(address)]
           let sourceValue16x2 = SIMD2<UInt16>(.zero, sourceValue16)
           sourceValue = unsafeBitCast(sourceValue16x2, to: Float.self)
         case .INT8:
           let castedPointer =
             sourcePointer
-            .assumingMemoryBound(to: Int8.self)
+              .assumingMemoryBound(to: Int8.self)
           sourceValue = Float(castedPointer[Int(address)])
         case .INT4:
           let castedPointer =
             sourcePointer
-            .assumingMemoryBound(to: UInt8.self)
+              .assumingMemoryBound(to: UInt8.self)
           let packedByte = castedPointer[Int(address) / 2]
           let isLowNibble = Int(address) % 2 == 0
           let nibble = isLowNibble ? (packedByte & 0xF) : (packedByte >> 4)
@@ -228,7 +243,8 @@ private func runCorrectnessTest(descriptor: GEMMDescriptor) {
   // Generate the output, on the reference implementation.
   var cpuOperandC = [Float](
     repeating: .zero,
-    count: Int(trailingDimensionC * leadingDimensions.C))
+    count: Int(trailingDimensionC * leadingDimensions.C)
+  )
   for m in 0..<matrixDimensions.M {
     for n in 0..<matrixDimensions.N {
       var dotProduct: Float = .zero
@@ -286,7 +302,8 @@ private func runCorrectnessTest(descriptor: GEMMDescriptor) {
   // Choose a tolerance for rounding error.
   let tolerance = createTolerance(
     memoryPrecisions: memoryPrecisions,
-    accumulationDimension: matrixDimensions.K)
+    accumulationDimension: matrixDimensions.K
+  )
 
   let latencies = [
     checkpoint1 - checkpoint0,
@@ -304,7 +321,8 @@ private func runCorrectnessTest(descriptor: GEMMDescriptor) {
 
   guard maxDistance < tolerance else {
     fatalError(
-      "Failed correctness test for problem config: \(descriptor)\n\(maxDistance) \(tolerance)")
+      "Failed correctness test for problem config: \(descriptor)\n\(maxDistance) \(tolerance)"
+    )
   }
 }
 
@@ -315,7 +333,9 @@ private func createTolerance(
     C: GEMMOperandPrecision
   ),
   accumulationDimension: UInt32
-) -> Float {
+)
+  -> Float
+{
   let precisions = [
     memoryPrecisions.A, memoryPrecisions.B, memoryPrecisions.C,
   ]

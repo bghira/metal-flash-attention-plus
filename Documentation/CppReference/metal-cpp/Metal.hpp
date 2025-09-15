@@ -20826,11 +20826,11 @@ namespace MTLFX
             _MTLFX_PRIVATE_DEF_SEL( depthTextureFormat,
                                     "depthTextureFormat" );
             _MTLFX_PRIVATE_DEF_SEL( depthTextureUsage,
-                                    "depthTextureUsage" );                                    
+                                    "depthTextureUsage" );
             _MTLFX_PRIVATE_DEF_SEL( encodeToCommandBuffer_,
                                     "encodeToCommandBuffer:" );
             _MTLFX_PRIVATE_DEF_SEL( exposureTexture,
-                                    "exposureTexture" );                                    
+                                    "exposureTexture" );
             _MTLFX_PRIVATE_DEF_SEL( fence,
                                     "fence" );
             _MTLFX_PRIVATE_DEF_SEL( inputContentHeight,
@@ -20898,7 +20898,7 @@ namespace MTLFX
             _MTLFX_PRIVATE_DEF_SEL( setDepthTextureFormat_,
                                     "setDepthTextureFormat:" );
             _MTLFX_PRIVATE_DEF_SEL( setExposureTexture_,
-                                    "setExposureTexture:" );                                    
+                                    "setExposureTexture:" );
             _MTLFX_PRIVATE_DEF_SEL( setFence_,
                                     "setFence:" );
             _MTLFX_PRIVATE_DEF_SEL( setInputContentHeight_,
@@ -21289,7 +21289,7 @@ namespace MTLFX
 
         float                                       preExposure() const;
         void                                        setPreExposure( float preExposure );
-        
+
         float                                       jitterOffsetX() const;
         void                                        setJitterOffsetX( float offset );
 

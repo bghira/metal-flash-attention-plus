@@ -43,9 +43,7 @@ public struct GEMMDescriptor {
 
   public var transposeState: (A: Bool, B: Bool)?
 
-  public init() {
-
-  }
+  public init() {}
 }
 
 struct GEMMKey: Equatable, Hashable {
@@ -63,14 +61,16 @@ struct GEMMKey: Equatable, Hashable {
     transposeState = GEMMKernelKey.createTransposeState(source.transposeState)
   }
 
-  @_transparent  // performance in -Ounchecked
+  @_transparent // performance in -Ounchecked
   static func createMatrixDimensions(
     _ input: (UInt32, UInt32, UInt32)?
-  ) -> SIMD3<UInt32> {
+  )
+    -> SIMD3<UInt32>
+  {
     if let input {
-      return SIMD3(input.0, input.1, input.2)
+      SIMD3(input.0, input.1, input.2)
     } else {
-      return SIMD3(repeating: .max)
+      SIMD3(repeating: .max)
     }
   }
 }
@@ -79,7 +79,9 @@ extension GEMMDescriptor: Hashable, Equatable {
   public static func == (
     lhs: GEMMDescriptor,
     rhs: GEMMDescriptor
-  ) -> Bool {
+  )
+    -> Bool
+  {
     let lhsKey = GEMMKey(copying: lhs)
     let rhsKey = GEMMKey(copying: rhs)
     return lhsKey == rhsKey
@@ -106,7 +108,8 @@ extension GEMMKernelDescriptor {
   ///
   /// Acceptable latency: no more than 1 μs per invocation.
   public init(descriptor: GEMMDescriptor) {
-    guard let matrixDimensions = descriptor.matrixDimensions,
+    guard
+      let matrixDimensions = descriptor.matrixDimensions,
       let memoryPrecisions = descriptor.memoryPrecisions,
       let transposeState = descriptor.transposeState
     else {
@@ -180,15 +183,14 @@ extension GEMMKernelDescriptor {
       //   - Swift release mode, Metal API validation off: ≥9 μs
       let coreCount = findCoreCount()
     #elseif os(iOS)
-      var coreCount: Int
-      if deviceName.starts(with: "A") {
+      var coreCount = if deviceName.starts(with: "A") {
         if mtlDevice.supportsFamily(.apple9) {
-          coreCount = 6
+          6
         } else {
-          coreCount = 5
+          5
         }
       } else {
-        coreCount = 10
+        10
       }
     #endif
 
@@ -196,7 +198,8 @@ extension GEMMKernelDescriptor {
     var registerPrecisionA = memoryPrecisions.A
     var registerPrecisionB = memoryPrecisions.B
     var registerPrecisionC = GEMMOperandPrecision.FP32
-    if memoryPrecisions.A == .FP16,
+    if
+      memoryPrecisions.A == .FP16,
       memoryPrecisions.B == .FP16,
       memoryPrecisions.C == .FP16
     {
@@ -214,19 +217,19 @@ extension GEMMKernelDescriptor {
     // Set the properties of the 'GEMMKernelDescriptor' object.
     self.memoryPrecisions = memoryPrecisions
     if mtlDevice.supportsFamily(.apple9) {
-      self.preferAsyncLoad = false
+      preferAsyncLoad = false
     } else {
-      self.preferAsyncLoad = true
+      preferAsyncLoad = true
     }
-    self.registerPrecisions = (
+    registerPrecisions = (
       registerPrecisionA,
       registerPrecisionB,
       registerPrecisionC
     )
     if !mtlDevice.supportsFamily(.apple9) {
-      self.splits = (2, 2)
+      splits = (2, 2)
     } else {
-      self.splits = (1, 1)
+      splits = (1, 1)
     }
     self.transposeState = transposeState
 
@@ -235,7 +238,8 @@ extension GEMMKernelDescriptor {
       mtlDevice: mtlDevice,
       coreCount: coreCount,
       matrixDimensions: matrixDimensions,
-      batchDimension: descriptor.batchDimension)
+      batchDimension: descriptor.batchDimension
+    )
   }
 
   // Implementation of the block size selection heuristic.
@@ -248,13 +252,14 @@ extension GEMMKernelDescriptor {
     matrixDimensions: (M: UInt32, N: UInt32, K: UInt32),
     batchDimension: Int
   ) {
-    guard let memoryPrecisions,
+    guard
+      let memoryPrecisions,
       let transposeState
     else {
       fatalError("Some properties were not set.")
     }
     guard !mtlDevice.supportsFamily(.apple9) else {
-      self.blockDimensions = (32, 32, 8)
+      blockDimensions = (32, 32, 8)
       return
     }
 
@@ -262,7 +267,7 @@ extension GEMMKernelDescriptor {
     func ceilDivide(_ target: UInt32, _ granularity: UInt16) -> UInt32 {
       (target + UInt32(granularity) - 1) / UInt32(granularity)
     }
-    var actualGroups: Int = 1
+    var actualGroups = 1
     actualGroups *= Int(ceilDivide(matrixDimensions.M, 48))
     actualGroups *= Int(ceilDivide(matrixDimensions.N, 48))
     actualGroups *= Int(batchDimension)
@@ -270,11 +275,11 @@ extension GEMMKernelDescriptor {
     // Does the kernel use 48x48x24xFP32 (9 KB) or 48x48x32xFP16/BF16 (6 KB)?
     func requiresLargeAllocation(_ precision: GEMMOperandPrecision) -> Bool {
       switch precision {
-      case .FP32: return true
-      case .FP16: return false
-      case .BF16: return false
-      case .INT8: return false  // Quantized types use less memory
-      case .INT4: return false  // Quantized types use less memory
+      case .FP32: true
+      case .FP16: false
+      case .BF16: false
+      case .INT8: false // Quantized types use less memory
+      case .INT4: false // Quantized types use less memory
       }
     }
     var useLargeAllocation = false
@@ -333,8 +338,9 @@ extension GEMMKernelDescriptor {
 extension GEMMDescriptor {
   // Specialize the Metal function with this GEMM descriptor.
   func setFunctionConstants(_ constants: MTLFunctionConstantValues) {
-    guard let matrixDimensions = self.matrixDimensions,
-      let transposeState = self.transposeState
+    guard
+      let matrixDimensions,
+      let transposeState
     else {
       fatalError("Descriptor was incomplete.")
     }
@@ -351,12 +357,13 @@ extension GEMMDescriptor {
       _ transposeState: Bool,
       _ untransposedRows: UInt32,
       _ untransposedColumns: UInt32
-    ) -> UInt32 {
-      var expectedLeading: UInt32
-      if transposeState {
-        expectedLeading = untransposedRows
+    )
+      -> UInt32
+    {
+      var expectedLeading: UInt32 = if transposeState {
+        untransposedRows
       } else {
-        expectedLeading = untransposedColumns
+        untransposedColumns
       }
 
       var actualLeading: UInt32
@@ -373,18 +380,21 @@ extension GEMMDescriptor {
     }
     var leadingDimensionA = chooseLeadingDimension(
       leadingDimensions?.A, transposeState.A,
-      matrixDimensions.M, matrixDimensions.K)
+      matrixDimensions.M, matrixDimensions.K
+    )
     var leadingDimensionB = chooseLeadingDimension(
       leadingDimensions?.B, transposeState.B,
-      matrixDimensions.K, matrixDimensions.N)
+      matrixDimensions.K, matrixDimensions.N
+    )
     var leadingDimensionC = chooseLeadingDimension(
       leadingDimensions?.C, false,
-      matrixDimensions.M, matrixDimensions.N)
+      matrixDimensions.M, matrixDimensions.N
+    )
     constants.setConstantValue(&leadingDimensionA, type: .uint, index: 5)
     constants.setConstantValue(&leadingDimensionB, type: .uint, index: 6)
     constants.setConstantValue(&leadingDimensionC, type: .uint, index: 7)
 
-    var loadPreviousC = self.loadPreviousC
+    var loadPreviousC = loadPreviousC
     constants.setConstantValue(&loadPreviousC, type: .bool, index: 10)
   }
 }

@@ -10,7 +10,6 @@ import XCTest
 @testable import FlashAttention
 
 final class QuantizedAttentionTest: XCTestCase {
-
   var device: MTLDevice!
   var quantizedAttention: QuantizedAttention!
 
@@ -37,7 +36,7 @@ final class QuantizedAttentionTest: XCTestCase {
       )
 
       XCTAssertEqual(params.precision, .INT8)
-      XCTAssertEqual(params.zeroPoint, 0)  // Symmetric quantization
+      XCTAssertEqual(params.zeroPoint, 0) // Symmetric quantization
       XCTAssertEqual(params.scale, 10.0 / 127.0, accuracy: 1e-6)
     }
 
@@ -49,7 +48,7 @@ final class QuantizedAttentionTest: XCTestCase {
       )
 
       XCTAssertEqual(params.precision, .INT4)
-      XCTAssertEqual(params.zeroPoint, 0)  // Symmetric quantization
+      XCTAssertEqual(params.zeroPoint, 0) // Symmetric quantization
       XCTAssertEqual(params.scale, 10.0 / 7.0, accuracy: 1e-6)
     }
   }
@@ -98,10 +97,11 @@ final class QuantizedAttentionTest: XCTestCase {
       // Check that dequantized values are close to original
       for i in 0..<count {
         let error = abs(dequantizedData[i] - originalData[i])
-        let tolerance = params.scale * 2  // Allow for quantization error
+        let tolerance = params.scale * 2 // Allow for quantization error
         XCTAssertLessThan(
           error, tolerance,
-          "INT8 quantization error too large at index \(i): \(error) > \(tolerance)")
+          "INT8 quantization error too large at index \(i): \(error) > \(tolerance)"
+        )
       }
     }
 
@@ -146,10 +146,11 @@ final class QuantizedAttentionTest: XCTestCase {
       // Check that dequantized values are close to original
       for i in 0..<count {
         let error = abs(dequantizedData[i] - originalData[i])
-        let tolerance = params.scale * 2  // Allow for quantization error
+        let tolerance = params.scale * 2 // Allow for quantization error
         XCTAssertLessThan(
           error, tolerance,
-          "INT4 quantization error too large at index \(i): \(error) > \(tolerance)")
+          "INT4 quantization error too large at index \(i): \(error) > \(tolerance)"
+        )
       }
     }
   }
@@ -179,7 +180,8 @@ final class QuantizedAttentionTest: XCTestCase {
       let tolerance = int8Tensor.parameters.scale * 2
       XCTAssertLessThan(
         error, tolerance,
-        "Reconstructed value error too large at index \(i)")
+        "Reconstructed value error too large at index \(i)"
+      )
     }
   }
 
@@ -277,7 +279,7 @@ final class QuantizedAttentionTest: XCTestCase {
     // Run a small benchmark to ensure the API works
     let results = quantizedAttention.benchmark(
       batchSize: 1,
-      sequenceLength: 64,  // Small size for test
+      sequenceLength: 64, // Small size for test
       headDim: 32,
       iterations: 5
     )
@@ -323,17 +325,17 @@ final class QuantizedAttentionTest: XCTestCase {
 
     print("Memory usage comparison:")
     print("FP32: \(fp32Size) bytes")
-    print("FP16: \(fp16Size) bytes (\(Float(fp16Size)/Float(fp32Size) * 100)% of FP32)")
-    print("INT8: \(int8Size) bytes (\(Float(int8Size)/Float(fp32Size) * 100)% of FP32)")
-    print("INT4: \(int4Size) bytes (\(Float(int4Size)/Float(fp32Size) * 100)% of FP32)")
+    print("FP16: \(fp16Size) bytes (\(Float(fp16Size) / Float(fp32Size) * 100)% of FP32)")
+    print("INT8: \(int8Size) bytes (\(Float(int8Size) / Float(fp32Size) * 100)% of FP32)")
+    print("INT4: \(int4Size) bytes (\(Float(int4Size) / Float(fp32Size) * 100)% of FP32)")
 
     // Verify expected memory reductions
-    XCTAssertEqual(int8Size, elementCount)  // 1 byte per element
-    XCTAssertEqual(int4Size, (elementCount + 1) / 2)  // 0.5 bytes per element (packed)
+    XCTAssertEqual(int8Size, elementCount) // 1 byte per element
+    XCTAssertEqual(int4Size, (elementCount + 1) / 2) // 0.5 bytes per element (packed)
 
     // Verify significant memory savings
-    XCTAssertLessThan(Float(int8Size), Float(fp32Size) * 0.3)  // Less than 30% of FP32
-    XCTAssertLessThan(Float(int4Size), Float(fp32Size) * 0.15)  // Less than 15% of FP32
+    XCTAssertLessThan(Float(int8Size), Float(fp32Size) * 0.3) // Less than 30% of FP32
+    XCTAssertLessThan(Float(int4Size), Float(fp32Size) * 0.15) // Less than 15% of FP32
   }
 
   func testQuantizedBackwardPass() {
@@ -374,23 +376,29 @@ final class QuantizedAttentionTest: XCTestCase {
       let gradOutputBuffer = device.makeBuffer(
         bytes: gradOutputData,
         length: totalElements * MemoryLayout<Float>.size,
-        options: .storageModeShared),
+        options: .storageModeShared
+      ),
       let logsumexpBuffer = device.makeBuffer(
         bytes: logsumexpData,
         length: sequenceLength * MemoryLayout<Float>.size,
-        options: .storageModeShared),
+        options: .storageModeShared
+      ),
       let gradQueryBuffer = device.makeBuffer(
         length: totalElements * MemoryLayout<Float>.size,
-        options: .storageModeShared),
+        options: .storageModeShared
+      ),
       let gradKeyBuffer = device.makeBuffer(
         length: totalElements * MemoryLayout<Float>.size,
-        options: .storageModeShared),
+        options: .storageModeShared
+      ),
       let gradValueBuffer = device.makeBuffer(
         length: totalElements * MemoryLayout<Float>.size,
-        options: .storageModeShared),
+        options: .storageModeShared
+      ),
       let dValuesBuffer = device.makeBuffer(
         length: sequenceLength * MemoryLayout<Float>.size,
-        options: .storageModeShared)
+        options: .storageModeShared
+      )
     else {
       XCTFail("Failed to create buffers")
       return
@@ -432,7 +440,8 @@ final class QuantizedAttentionTest: XCTestCase {
 
     XCTAssertNil(
       queryCommandBuffer.error,
-      "Backward query pass failed: \(queryCommandBuffer.error?.localizedDescription ?? "")")
+      "Backward query pass failed: \(queryCommandBuffer.error?.localizedDescription ?? "")"
+    )
 
     // Test backward key-value pass
     guard
@@ -457,14 +466,17 @@ final class QuantizedAttentionTest: XCTestCase {
 
     XCTAssertNil(
       kvCommandBuffer.error,
-      "Backward key-value pass failed: \(kvCommandBuffer.error?.localizedDescription ?? "")")
+      "Backward key-value pass failed: \(kvCommandBuffer.error?.localizedDescription ?? "")"
+    )
 
     // Verify gradients are not all zeros
     let gradQueryPtr = gradQueryBuffer.contents().bindMemory(
-      to: Float.self, capacity: totalElements)
+      to: Float.self, capacity: totalElements
+    )
     let gradKeyPtr = gradKeyBuffer.contents().bindMemory(to: Float.self, capacity: totalElements)
     let gradValuePtr = gradValueBuffer.contents().bindMemory(
-      to: Float.self, capacity: totalElements)
+      to: Float.self, capacity: totalElements
+    )
 
     var queryGradNorm: Float = 0
     var keyGradNorm: Float = 0

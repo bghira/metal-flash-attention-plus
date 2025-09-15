@@ -30,7 +30,8 @@ public struct AttentionKernel {
   var softmaxScale: Float
 
   public init(descriptor: AttentionKernelDescriptor) {
-    guard let blockDimensions = descriptor.blockDimensions,
+    guard
+      let blockDimensions = descriptor.blockDimensions,
       let headDimension = descriptor.headDimension,
       let preferAsyncCache = descriptor.preferAsyncCache,
       let preferAsyncLoad = descriptor.preferAsyncLoad,
@@ -40,22 +41,22 @@ public struct AttentionKernel {
     }
     self.type = type
 
-    self.cacheState = descriptor.cacheState
-    self.memoryPrecisions = descriptor.memoryPrecisions
+    cacheState = descriptor.cacheState
+    memoryPrecisions = descriptor.memoryPrecisions
     self.preferAsyncCache = preferAsyncCache
     self.preferAsyncLoad = preferAsyncLoad
-    self.registerPrecisions = descriptor.registerPrecisions
-    self.transposeState = descriptor.transposeState
+    registerPrecisions = descriptor.registerPrecisions
+    transposeState = descriptor.transposeState
 
     self.blockDimensions = blockDimensions
     self.headDimension = headDimension
 
     // Set scale factor with backward compatibility
     if let customScale = descriptor.softmaxScale {
-      self.softmaxScale = customScale
+      softmaxScale = customScale
     } else {
       // Default to 1/√head_dim for backward compatibility
-      self.softmaxScale = 1.0 / Float(headDimension).squareRoot()
+      softmaxScale = 1.0 / Float(headDimension).squareRoot()
     }
 
     // Pick the threadgroup memory allocation size.
@@ -93,7 +94,8 @@ extension AttentionKernel {
   }
 
   func loadFunction(_ operand: AttentionOperand) -> String {
-    guard let memoryPrecision = memoryPrecisions[operand],
+    guard
+      let memoryPrecision = memoryPrecisions[operand],
       let registerPrecision = registerPrecisions[operand]
     else {
       fatalError("Precision of \(operand) was not specified.")
@@ -106,26 +108,22 @@ extension AttentionKernel {
       fatalError("Invalid precisions.")
     case (.FP16, .FP32):
       return "load"
-
     case (.BF16, .FP16):
       fatalError("Invalid precisions.")
     case (.BF16, .BF16):
       return "load"
     case (.BF16, .FP32):
       return "load_bfloat"
-
     case (.FP32, .FP16):
       fatalError("Invalid precisions.")
     case (.FP32, .BF16):
       fatalError("Invalid precisions.")
     case (.FP32, .FP32):
       return "load"
-
     case (.INT8, .FP32):
       return "load_quantized_int8"
     case (.INT4, .FP32):
       return "load_quantized_int4"
-
     case (.INT8, _), (.INT4, _):
       fatalError("Quantized inputs must use FP32 register precision.")
     case (_, .INT8), (_, .INT4):
@@ -134,7 +132,8 @@ extension AttentionKernel {
   }
 
   func storeFunction(_ operand: AttentionOperand) -> String {
-    guard let memoryPrecision = memoryPrecisions[operand],
+    guard
+      let memoryPrecision = memoryPrecisions[operand],
       let registerPrecision = registerPrecisions[operand]
     else {
       fatalError("Precision of \(operand) was not specified.")
@@ -147,26 +146,22 @@ extension AttentionKernel {
       fatalError("Invalid precisions.")
     case (.FP16, .FP32):
       return "store"
-
     case (.BF16, .FP16):
       fatalError("Invalid precisions.")
     case (.BF16, .BF16):
       return "store"
     case (.BF16, .FP32):
       return "store_bfloat"
-
     case (.FP32, .FP16):
       fatalError("Invalid precisions.")
     case (.FP32, .BF16):
       fatalError("Invalid precisions.")
     case (.FP32, .FP32):
       return "store"
-
     case (.INT8, .FP32):
       return "store_quantized_int8"
     case (.INT4, .FP32):
       return "store_quantized_int4"
-
     case (.INT8, _), (.INT4, _):
       fatalError("Quantized outputs must use FP32 register precision.")
     case (_, .INT8), (_, .INT4):
@@ -197,7 +192,9 @@ extension AttentionKernel {
 
   func loadCall(
     _ operand: AttentionOperand, src: String, leadingDim: String, origin: String, transpose: String
-  ) -> String {
+  )
+    -> String
+  {
     if isQuantized(operand) {
       // For quantized operands, we need to include scale and zero_point parameters
       let operandName = "\(operand)".lowercased()
@@ -214,10 +211,10 @@ extension AttentionKernel {
 extension AttentionKernel {
   func sequenceLength(_ operand: AttentionOperand) -> String {
     switch operand {
-    case .Q, .dQ: return "R"
-    case .K, .dK: return "C"
-    case .V, .dV: return "C"
-    case .O, .dO: return "R"
+    case .Q, .dQ: "R"
+    case .K, .dK: "C"
+    case .V, .dV: "C"
+    case .O, .dO: "R"
     default: fatalError("Unrecognized operand.")
     }
   }
@@ -226,19 +223,19 @@ extension AttentionKernel {
     switch type {
     case .forward, .backwardQuery:
       switch operand {
-      case .Q, .dQ: return blockDimensions.parallelization
-      case .K, .dK: return blockDimensions.traversal
-      case .V, .dV: return blockDimensions.traversal
-      case .O, .dO: return blockDimensions.parallelization
+      case .Q, .dQ: blockDimensions.parallelization
+      case .K, .dK: blockDimensions.traversal
+      case .V, .dV: blockDimensions.traversal
+      case .O, .dO: blockDimensions.parallelization
       default: fatalError("Unrecognized operand.")
       }
 
     case .backwardKeyValue:
       switch operand {
-      case .Q, .dQ: return blockDimensions.traversal
-      case .K, .dK: return blockDimensions.parallelization
-      case .V, .dV: return blockDimensions.parallelization
-      case .O, .dO: return blockDimensions.traversal
+      case .Q, .dQ: blockDimensions.traversal
+      case .K, .dK: blockDimensions.parallelization
+      case .V, .dV: blockDimensions.parallelization
+      case .O, .dO: blockDimensions.traversal
       default: fatalError("Unrecognized operand.")
       }
     }
@@ -246,17 +243,17 @@ extension AttentionKernel {
 
   func leadingDimension(_ operand: AttentionOperand) -> String {
     if transposed(operand) {
-      return sequenceLength(operand)
+      sequenceLength(operand)
     } else {
-      return "\(headDimension)"
+      "\(headDimension)"
     }
   }
 
   func leadingBlockDimension(_ operand: AttentionOperand) -> UInt16 {
     if transposed(operand) {
-      return blockSequenceLength(operand)
+      blockSequenceLength(operand)
     } else {
-      return blockDimensions.head
+      blockDimensions.head
     }
   }
 }
@@ -265,9 +262,9 @@ extension AttentionKernel {
   var parallelizationDimension: String {
     switch type {
     case .forward, .backwardQuery:
-      return "R"
+      "R"
     case .backwardKeyValue:
-      return "C"
+      "C"
     }
   }
 
@@ -286,18 +283,18 @@ extension AttentionKernel {
   var traversalDimension: String {
     switch type {
     case .forward, .backwardQuery:
-      return "C"
+      "C"
     case .backwardKeyValue:
-      return "R"
+      "R"
     }
   }
 
   var traversalOffset: String {
     switch type {
     case .forward, .backwardQuery:
-      return "c"
+      "c"
     case .backwardKeyValue:
-      return "r"
+      "r"
     }
   }
 
@@ -316,10 +313,10 @@ extension AttentionKernel {
 
   var paddedHeadEdge: UInt16 {
     let blockDim = blockDimensions.head
-    let remainder = (headDimension) % (blockDim)
+    let remainder = headDimension % blockDim
 
-    var output = (remainder) == 0 ? (blockDim) : (remainder)
-    output = (((output)) + 7) / 8 * 8
+    var output = remainder == 0 ? blockDim : remainder
+    output = (output + 7) / 8 * 8
     return output
   }
 
@@ -405,7 +402,8 @@ extension AttentionKernel {
     if case .backwardQuery = type {
       output = max(
         output,
-        2 * blockDimensions.parallelization * 8 * 4)
+        2 * blockDimensions.parallelization * 8 * 4
+      )
     }
 
     // L or D
@@ -414,7 +412,8 @@ extension AttentionKernel {
     if case .backwardKeyValue = type {
       output = max(
         output,
-        blockDimensions.traversal * 4)
+        blockDimensions.traversal * 4
+      )
     }
 
     return output

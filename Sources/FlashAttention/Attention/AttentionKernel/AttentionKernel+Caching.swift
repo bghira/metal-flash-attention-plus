@@ -18,129 +18,135 @@ extension AttentionKernel {
   func cache(
     operand: AttentionOperand,
     type: CachingOperationType
-  ) -> String {
+  )
+    -> String
+  {
     // MARK: - Operand
 
     func allocateOperand() -> String {
       if type == .load {
-        return """
+        """
 
-          simdgroup_matrix_storage<\(registerName(operand))> \
-          \(operand)_sram[\(paddedHeadDimension / 8)];
+        simdgroup_matrix_storage<\(registerName(operand))> \
+        \(operand)_sram[\(paddedHeadDimension / 8)];
 
-          """
+        """
       } else {
-        return ""
+        ""
       }
     }
 
     func asyncAccessOperand() -> String {
       if type == .load {
-        return """
+        """
 
-          threadgroup_barrier(mem_flags::mem_threadgroup);
-          if (sidx == 0) {
-            uint2 \(operand)_offset(d_outer, \(parallelizationGroupOffset));
-            auto src = simdgroup_matrix_storage<\(memoryName(operand))>
-            ::apply_offset(
-              \(operand), \(leadingDimension(operand)),
-              \(operand)_offset, \(transposed(operand)));
-            auto dst = (threadgroup \(memoryName(operand))*)(threadgroup_block);
-            
-            ushort D_src_dimension = min(
-              ushort(\(blockDimensions.head)),
-              ushort(\(headDimension) - d_outer));
-            ushort D_dst_dimension = min(
-              ushort(\(blockDimensions.head)),
-              ushort(\(paddedHeadDimension) - d_outer));
-            ushort R_dimension = min(
-              uint(\(blockDimensions.parallelization)),
-              uint(\(parallelizationDimension) - \(parallelizationGroupOffset)));
-            ushort2 tile_src(D_src_dimension, R_dimension);
-            ushort2 tile_dst(D_dst_dimension, R_dimension);
-            
-            simdgroup_event event;
-            event.async_copy(
-              dst, \(leadingBlockDimension(operand)), tile_dst,
-              src, \(leadingDimension(operand)), tile_src,
-              \(transposed(operand)));
-            simdgroup_event::wait(1, &event);
-          }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        if (sidx == 0) {
+          uint2 \(operand)_offset(d_outer, \(parallelizationGroupOffset));
+          auto src = simdgroup_matrix_storage<\(memoryName(operand))>
+          ::apply_offset(
+            \(operand), \(leadingDimension(operand)),
+            \(operand)_offset, \(transposed(operand)));
+          auto dst = (threadgroup \(memoryName(operand))*)(threadgroup_block);
 
-          """
+          ushort D_src_dimension = min(
+            ushort(\(blockDimensions.head)),
+            ushort(\(headDimension) - d_outer));
+          ushort D_dst_dimension = min(
+            ushort(\(blockDimensions.head)),
+            ushort(\(paddedHeadDimension) - d_outer));
+          ushort R_dimension = min(
+            uint(\(blockDimensions.parallelization)),
+            uint(\(parallelizationDimension) - \(parallelizationGroupOffset)));
+          ushort2 tile_src(D_src_dimension, R_dimension);
+          ushort2 tile_dst(D_dst_dimension, R_dimension);
+
+          simdgroup_event event;
+          event.async_copy(
+            dst, \(leadingBlockDimension(operand)), tile_dst,
+            src, \(leadingDimension(operand)), tile_src,
+            \(transposed(operand)));
+          simdgroup_event::wait(1, &event);
+        }
+
+        """
       } else {
-        return """
+        """
 
-          threadgroup_barrier(mem_flags::mem_threadgroup);
-          if (sidx == 0) {
-            uint2 \(operand)_offset(d_outer, \(parallelizationGroupOffset));
-            auto src = (threadgroup \(memoryName(operand))*)(threadgroup_block);
-            auto dst = simdgroup_matrix_storage<\(memoryName(operand))>
-            ::apply_offset(
-              \(operand), \(leadingDimension(operand)),
-              \(operand)_offset, \(transposed(operand)));
-            
-            ushort D_dimension = min(
-              ushort(\(blockDimensions.head)),
-              ushort(\(headDimension) - d_outer));
-            ushort R_dimension = min(
-              uint(\(blockDimensions.parallelization)),
-              uint(\(parallelizationDimension) - \(parallelizationGroupOffset)));
-            ushort2 tile(D_dimension, R_dimension);
-            
-            simdgroup_event event;
-            event.async_copy(
-              dst, \(leadingDimension(operand)), tile,
-              src, \(leadingBlockDimension(operand)), tile,
-              \(transposed(operand)));
-            simdgroup_event::wait(1, &event);
-          }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        if (sidx == 0) {
+          uint2 \(operand)_offset(d_outer, \(parallelizationGroupOffset));
+          auto src = (threadgroup \(memoryName(operand))*)(threadgroup_block);
+          auto dst = simdgroup_matrix_storage<\(memoryName(operand))>
+          ::apply_offset(
+            \(operand), \(leadingDimension(operand)),
+            \(operand)_offset, \(transposed(operand)));
 
-          """
+          ushort D_dimension = min(
+            ushort(\(blockDimensions.head)),
+            ushort(\(headDimension) - d_outer));
+          ushort R_dimension = min(
+            uint(\(blockDimensions.parallelization)),
+            uint(\(parallelizationDimension) - \(parallelizationGroupOffset)));
+          ushort2 tile(D_dimension, R_dimension);
+
+          simdgroup_event event;
+          event.async_copy(
+            dst, \(leadingDimension(operand)), tile,
+            src, \(leadingBlockDimension(operand)), tile,
+            \(transposed(operand)));
+          simdgroup_event::wait(1, &event);
+        }
+
+        """
       }
     }
 
     func leadingDimensionOperand(
       _ descriptor: LoopIterationDescriptor
-    ) -> String {
+    )
+      -> String
+    {
       if descriptor.addressSpace == .device {
-        return leadingDimension(operand)
+        leadingDimension(operand)
       } else {
-        return "\(leadingBlockDimension(operand))"
+        "\(leadingBlockDimension(operand))"
       }
     }
 
     func declareOperandLocation(
       descriptor: LoopIterationDescriptor
-    ) -> String {
+    )
+      -> String
+    {
       if descriptor.addressSpace == .device {
-        return """
+        """
 
-          uint2 \(operand)_src_offset(
-            morton_offset.x + d_outer,
-            \(clampedParallelizationThreadOffset));
-          auto \(operand)_src = simdgroup_matrix_storage<\(memoryName(operand))>
-          ::apply_offset(
-            \(operand), \(leadingDimension(operand)),
-            \(operand)_src_offset, \(transposed(operand)));
+        uint2 \(operand)_src_offset(
+          morton_offset.x + d_outer,
+          \(clampedParallelizationThreadOffset));
+        auto \(operand)_src = simdgroup_matrix_storage<\(memoryName(operand))>
+        ::apply_offset(
+          \(operand), \(leadingDimension(operand)),
+          \(operand)_src_offset, \(transposed(operand)));
 
-          """
+        """
       } else {
-        return """
+        """
 
-          ushort2 \(operand)_block_offset(
-            morton_offset.x, 
-            morton_offset.y + sidx * 8);
-          auto \(operand)_src =
-          (threadgroup \(memoryName(operand))*)(threadgroup_block);
+        ushort2 \(operand)_block_offset(
+          morton_offset.x,
+          morton_offset.y + sidx * 8);
+        auto \(operand)_src =
+        (threadgroup \(memoryName(operand))*)(threadgroup_block);
 
-          \(operand)_src = simdgroup_matrix_storage<\(memoryName(operand))>
-          ::apply_offset(
-            \(operand)_src, \(leadingBlockDimension(operand)),
-            \(operand)_block_offset, \(transposed(operand)));
-          threadgroup_barrier(mem_flags::mem_threadgroup);
+        \(operand)_src = simdgroup_matrix_storage<\(memoryName(operand))>
+        ::apply_offset(
+          \(operand)_src, \(leadingBlockDimension(operand)),
+          \(operand)_block_offset, \(transposed(operand)));
+        threadgroup_barrier(mem_flags::mem_threadgroup);
 
-          """
+        """
       }
     }
 
@@ -150,29 +156,37 @@ extension AttentionKernel {
       headStart: UInt16,
       headEnd: UInt16,
       descriptor: LoopIterationDescriptor
-    ) -> String {
+    )
+      -> String
+    {
       if type == .load {
-        return """
+        """
 
-          #pragma clang loop unroll(full)
-          for (ushort d = \(headStart); d < \(headEnd); d += 8) {
-            ushort2 \(operand)_origin(d, 0);
-            \(operand)_sram[(d_outer + d) / 8].\(loadCall(operand, src: "\(operand)_src", leadingDim: "\(leadingDimensionOperand(descriptor))", origin: "\(operand)_origin", transpose: "\(transposed(operand))"));
-          }
+        #pragma clang loop unroll(full)
+        for (ushort d = \(headStart); d < \(headEnd); d += 8) {
+          ushort2 \(operand)_origin(d, 0);
+          \(operand)_sram[(d_outer + d) / 8].\(loadCall(
+            operand,
+            src: "\(operand)_src",
+            leadingDim: "\(leadingDimensionOperand(descriptor))",
+            origin: "\(operand)_origin",
+            transpose: "\(transposed(operand))"
+          ));
+        }
 
-          """
+        """
       } else {
-        return """
+        """
 
-          #pragma clang loop unroll(full)
-          for (ushort d = \(headStart); d < \(headEnd); d += 8) {
-            ushort2 \(operand)_origin(d, 0);
-            \(operand)_sram[(d_outer + d) / 8].\(storeFunction(operand))(
-              \(operand)_src, \(leadingDimensionOperand(descriptor)),
-              \(operand)_origin, \(transposed(operand)));
-          }
+        #pragma clang loop unroll(full)
+        for (ushort d = \(headStart); d < \(headEnd); d += 8) {
+          ushort2 \(operand)_origin(d, 0);
+          \(operand)_sram[(d_outer + d) / 8].\(storeFunction(operand))(
+            \(operand)_src, \(leadingDimensionOperand(descriptor)),
+            \(operand)_origin, \(transposed(operand)));
+        }
 
-          """
+        """
       }
     }
 
@@ -184,57 +198,62 @@ extension AttentionKernel {
 
     func loopIteration(
       descriptor: LoopIterationDescriptor
-    ) -> String {
+    )
+      -> String
+    {
       func loadOperand() -> String {
         if type == .load {
-          return asyncAccessOperand()
+          asyncAccessOperand()
         } else {
-          return ""
+          ""
         }
       }
 
       func storeOperand() -> String {
         if type == .load {
-          return ""
+          ""
         } else {
-          return asyncAccessOperand()
+          asyncAccessOperand()
         }
       }
 
       if descriptor.addressSpace == .device {
         return """
 
-          \(declareOperandLocation(descriptor: descriptor))
-          if (
-            \(type == .load) ||
-            (\(unsafeParallelizationThreadOffset) < \(parallelizationDimension))
-          ) {
-          \(innerLoopHead(
-            headStart: 0,
-            headEnd: blockDimensions.head,
-            descriptor: descriptor))
-          }
+        \(declareOperandLocation(descriptor: descriptor))
+        if (
+          \(type == .load) ||
+          (\(unsafeParallelizationThreadOffset) < \(parallelizationDimension))
+        ) {
+        \(innerLoopHead(
+          headStart: 0,
+          headEnd: blockDimensions.head,
+          descriptor: descriptor
+        ))
+        }
 
-          """
+        """
       } else {
         return """
 
-          \(loadOperand())
-          \(declareOperandLocation(descriptor: descriptor))
-          if (d_outer + \(blockDimensions.head) <= \(headDimension)) {
-            \(innerLoopHead(
-              headStart: 0,
-              headEnd: blockDimensions.head,
-              descriptor: descriptor))
-          } else {
-            \(innerLoopHead(
-              headStart: 0,
-              headEnd: headDimension % blockDimensions.head,
-              descriptor: descriptor))
-          }
-          \(storeOperand())
+        \(loadOperand())
+        \(declareOperandLocation(descriptor: descriptor))
+        if (d_outer + \(blockDimensions.head) <= \(headDimension)) {
+          \(innerLoopHead(
+            headStart: 0,
+            headEnd: blockDimensions.head,
+            descriptor: descriptor
+          ))
+        } else {
+          \(innerLoopHead(
+            headStart: 0,
+            headEnd: headDimension % blockDimensions.head,
+            descriptor: descriptor
+          ))
+        }
+        \(storeOperand())
 
-          """
+        """
       }
     }
 
@@ -245,37 +264,37 @@ extension AttentionKernel {
       descriptorThreadgroup.addressSpace = .threadgroup
 
       let condition = """
-        \(!preferAsyncCache) && (
-          (\(headDimension) % \(blockDimensions.head) == 0) ||
-          (d_outer + \(blockDimensions.head) <= \(headDimension))
-        )
-        """
+      \(!preferAsyncCache) && (
+        (\(headDimension) % \(blockDimensions.head) == 0) ||
+        (d_outer + \(blockDimensions.head) <= \(headDimension))
+      )
+      """
 
       return """
 
-        if (\(condition)) {
-          \(loopIteration(descriptor: descriptorDevice))
-        } else {
-          \(loopIteration(descriptor: descriptorThreadgroup))
-        }
+      if (\(condition)) {
+        \(loopIteration(descriptor: descriptorDevice))
+      } else {
+        \(loopIteration(descriptor: descriptorThreadgroup))
+      }
 
-        """
+      """
     }
 
     return """
 
-      \(allocateOperand())
+    \(allocateOperand())
 
-      #pragma clang loop unroll(full)
-      for (
-        ushort d_outer = 0;
-        d_outer < \(headDimension);
-        d_outer += \(blockDimensions.head)
-      ) {
-        \(gatedLoopIteration())
-      }
+    #pragma clang loop unroll(full)
+    for (
+      ushort d_outer = 0;
+      d_outer < \(headDimension);
+      d_outer += \(blockDimensions.head)
+    ) {
+      \(gatedLoopIteration())
+    }
 
-      """
+    """
   }
 }
 
@@ -293,7 +312,7 @@ extension AttentionKernel {
     }
 
     // Initialize the output string.
-    var output: String = ""
+    var output = ""
 
     switch type {
     case .forward:
@@ -305,10 +324,10 @@ extension AttentionKernel {
       }
       output += """
 
-        float m = -numeric_limits<float>::max();
-        float l = numeric_limits<float>::denorm_min();
+      float m = -numeric_limits<float>::max();
+      float l = numeric_limits<float>::denorm_min();
 
-        """
+      """
 
     case .backwardQuery:
       if cached(.Q) {
@@ -321,7 +340,8 @@ extension AttentionKernel {
         output += allocate(operand: .dQ)
       }
 
-      guard let memoryPrecisionL = memoryPrecisions[.L],
+      guard
+        let memoryPrecisionL = memoryPrecisions[.L],
         memoryPrecisionL != .BF16
       else {
         fatalError("Invalid memory precision for L.")
@@ -331,10 +351,10 @@ extension AttentionKernel {
       // conversion code here.
       output += """
 
-        float L_sram = L[\(clampedParallelizationThreadOffset)];
-        \(computeD())
+      float L_sram = L[\(clampedParallelizationThreadOffset)];
+      \(computeD())
 
-        """
+      """
 
     case .backwardKeyValue:
       if cached(.K) {
@@ -357,7 +377,7 @@ extension AttentionKernel {
   // Store any cached outputs to memory.
   func createCleanup(type: AttentionKernelType) -> String {
     // Initialize the output string.
-    var output: String = ""
+    var output = ""
 
     switch type {
     case .forward:
@@ -369,13 +389,13 @@ extension AttentionKernel {
       // conversion code here.
       output += """
 
-        if (\(unsafeParallelizationThreadOffset) < \(parallelizationDimension)) {
-          // Premultiplied by log_base_2(e).
-          float L_sram = m + fast::log2(l);
-          L[\(clampedParallelizationThreadOffset)] = L_sram;
-        }
+      if (\(unsafeParallelizationThreadOffset) < \(parallelizationDimension)) {
+        // Premultiplied by log_base_2(e).
+        float L_sram = m + fast::log2(l);
+        L[\(clampedParallelizationThreadOffset)] = L_sram;
+      }
 
-        """
+      """
 
     case .backwardQuery:
       if cached(.dQ) {
@@ -386,30 +406,30 @@ extension AttentionKernel {
       func storeD() -> String {
         switch memoryPrecisions[.D] {
         case .FP32:
-          return """
+          """
 
-            D[\(clampedParallelizationThreadOffset)] = D_sram;
+          D[\(clampedParallelizationThreadOffset)] = D_sram;
 
-            """
+          """
         case .BF16:
-          return """
+          """
 
-            bfloat2 registerForm = *(thread bfloat2*)(&D_sram);
-            bfloat memoryForm = registerForm[1];
-            D[\(clampedParallelizationThreadOffset)] = memoryForm;
+          bfloat2 registerForm = *(thread bfloat2*)(&D_sram);
+          bfloat memoryForm = registerForm[1];
+          D[\(clampedParallelizationThreadOffset)] = memoryForm;
 
-            """
+          """
         default:
           fatalError("Invalid memory precision for D.")
         }
       }
       output += """
 
-        if (\(unsafeParallelizationThreadOffset) < \(parallelizationDimension)) {
-          \(storeD())
-        }
+      if (\(unsafeParallelizationThreadOffset) < \(parallelizationDimension)) {
+        \(storeD())
+      }
 
-        """
+      """
 
     case .backwardKeyValue:
       if cached(.dK) {

@@ -30,43 +30,39 @@ public enum AttentionOperand: Hashable, Equatable, CustomStringConvertible {
   /// the name can be injected through string interpolation.
   public var description: String {
     switch self {
-    case .Q: return "Q"
-    case .K: return "K"
-    case .S: return "S"
-    case .P: return "P"
-    case .V: return "V"
-    case .O: return "O"
-
-    case .L: return "L"
-    case .D: return "D"
-
-    case .dO: return "dO"
-    case .dV: return "dV"
-    case .dP: return "dP"
-    case .dS: return "dS"
-    case .dK: return "dK"
-    case .dQ: return "dQ"
+    case .Q: "Q"
+    case .K: "K"
+    case .S: "S"
+    case .P: "P"
+    case .V: "V"
+    case .O: "O"
+    case .L: "L"
+    case .D: "D"
+    case .dO: "dO"
+    case .dV: "dV"
+    case .dP: "dP"
+    case .dS: "dS"
+    case .dK: "dK"
+    case .dQ: "dQ"
     }
   }
 
   public var bufferBinding: UInt8? {
     switch self {
-    case .Q: return 0
-    case .K: return 1
-    case .S: return nil
-    case .P: return nil
-    case .V: return 2
-    case .O: return 3
-
-    case .L: return 4
-    case .D: return 5
-
-    case .dO: return 6
-    case .dV: return 7
-    case .dP: return nil
-    case .dS: return nil
-    case .dK: return 8
-    case .dQ: return 9
+    case .Q: 0
+    case .K: 1
+    case .S: nil
+    case .P: nil
+    case .V: 2
+    case .O: 3
+    case .L: 4
+    case .D: 5
+    case .dO: 6
+    case .dV: 7
+    case .dP: nil
+    case .dS: nil
+    case .dK: 8
+    case .dQ: 9
     }
   }
 }

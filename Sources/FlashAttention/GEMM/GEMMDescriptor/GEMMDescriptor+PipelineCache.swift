@@ -1,5 +1,5 @@
 //
-//  PipelineCache.swift
+//  GEMMDescriptor+PipelineCache.swift
 //  FlashAttention
 //
 //  Created by Philip Turner on 6/21/24.
@@ -7,21 +7,21 @@
 
 import Metal
 
-extension GEMMKernel {
-  public typealias LibraryValue = (
+public extension GEMMKernel {
+  typealias LibraryValue = (
     kernel: GEMMKernel, library: MTLLibrary
   )
-  public typealias PipelineValue = (
+  typealias PipelineValue = (
     kernel: GEMMKernel, pipeline: MTLComputePipelineState
   )
 
-  public static var libraryCache: [GEMMKernelDescriptor: LibraryValue] = [:]
-  public static var pipelineCache: [GEMMDescriptor: PipelineValue] = [:]
+  static var libraryCache: [GEMMKernelDescriptor: LibraryValue] = [:]
+  static var pipelineCache: [GEMMDescriptor: PipelineValue] = [:]
 }
 
-extension GEMMKernel {
+public extension GEMMKernel {
   // Register this problem configuration in the cache.
-  public static func register(descriptor: GEMMDescriptor) {
+  static func register(descriptor: GEMMDescriptor) {
     guard pipelineCache[descriptor] == nil else {
       return
     }
@@ -44,7 +44,9 @@ extension GEMMKernel {
 
     func createLibrary(
       _ kernelDescriptor: GEMMKernelDescriptor
-    ) -> LibraryValue {
+    )
+      -> LibraryValue
+    {
       if let output = GEMMKernel.libraryCache[kernelDescriptor] {
         return output
       } else {
@@ -60,15 +62,19 @@ extension GEMMKernel {
 
     func createPipeline(
       _ libraryValue: LibraryValue
-    ) -> PipelineValue {
+    )
+      -> PipelineValue
+    {
       let constants = MTLFunctionConstantValues()
       descriptor.setFunctionConstants(constants)
 
       let library = libraryValue.library
       let function = try! library.makeFunction(
-        name: "gemm", constantValues: constants)
+        name: "gemm", constantValues: constants
+      )
       let pipeline = try! device.makeComputePipelineState(
-        function: function)
+        function: function
+      )
       return (libraryValue.kernel, pipeline)
     }
 

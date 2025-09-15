@@ -7,51 +7,51 @@
 
 // Top level specification of the code structure.
 
-extension AttentionKernel {
-  public func createSource() -> String {
+public extension AttentionKernel {
+  func createSource() -> String {
     func createLoop() -> String {
       switch type {
       case .forward:
-        return loopForward()
+        loopForward()
       case .backwardQuery:
-        return loopBackwardQuery()
+        loopBackwardQuery()
       case .backwardKeyValue:
-        return loopBackwardKeyValue()
+        loopBackwardKeyValue()
       }
     }
 
     return """
 
-      \(createMetalSimdgroupEvent())
-      \(createMetalSimdgroupMatrixStorage())
-      using namespace metal;
+    \(createMetalSimdgroupEvent())
+    \(createMetalSimdgroupMatrixStorage())
+    using namespace metal;
 
-      \(createConstants())
+    \(createConstants())
 
-      // Declare the function.
-      kernel void attention(
-        \(createBufferBindings())
-        threadgroup uchar *threadgroup_block [[threadgroup(0)]],
-        
-        uint gid [[threadgroup_position_in_grid]],
-        ushort sidx [[simdgroup_index_in_threadgroup]],
-        ushort lane_id [[thread_index_in_simdgroup]]
-      ) {
-        ushort2 morton_offset = morton_order(lane_id);
-        uint parallelization_group_offset = gid;
-        parallelization_group_offset *= \(blockDimensions.parallelization);
-        
-        // Return early if the entire SIMD is out of bounds.
-        if (\(parallelizationGroupOffset) >= \(parallelizationDimension)) {
-          return;
-        }
-        
-        \(createSetup())
-        \(createLoop())
-        \(createCleanup(type: type))
+    // Declare the function.
+    kernel void attention(
+      \(createBufferBindings())
+      threadgroup uchar *threadgroup_block [[threadgroup(0)]],
+
+      uint gid [[threadgroup_position_in_grid]],
+      ushort sidx [[simdgroup_index_in_threadgroup]],
+      ushort lane_id [[thread_index_in_simdgroup]]
+    ) {
+      ushort2 morton_offset = morton_order(lane_id);
+      uint parallelization_group_offset = gid;
+      parallelization_group_offset *= \(blockDimensions.parallelization);
+
+      // Return early if the entire SIMD is out of bounds.
+      if (\(parallelizationGroupOffset) >= \(parallelizationDimension)) {
+        return;
       }
 
-      """
+      \(createSetup())
+      \(createLoop())
+      \(createCleanup(type: type))
+    }
+
+    """
   }
 }
 
@@ -98,7 +98,7 @@ extension AttentionKernel {
       $0.bufferBinding! < $1.bufferBinding!
     }
 
-    var output: String = ""
+    var output = ""
     var currentBufferIndex = 0
 
     // First pass: regular operand buffers
@@ -198,32 +198,32 @@ extension AttentionKernel {
 
     return """
 
-      // Outer loop over the traversal dimension.
-      for (uint c = 0; c < C; c += \(blockDimensions.traversal)) {
-        // S = Q * K^T
-        \(QKT)
-        \(maskAttentionMatrixEdge())
-        \(maskSparsityPattern())
+    // Outer loop over the traversal dimension.
+    for (uint c = 0; c < C; c += \(blockDimensions.traversal)) {
+      // S = Q * K^T
+      \(QKT)
+      \(maskAttentionMatrixEdge())
+      \(maskSparsityPattern())
 
-        // m = reduce(m)
-        \(onlineReduceMaximum())
-        
-        // correction = exp(m_old) / exp(m_new)
-        \(onlineCorrectO())
-        
-        // P = softmax(S * scaleFactor)
-        \(softmax(derivative: false))
-        
-        // l = reduce(l)
-        \(onlineReduceSum())
-        
-        // O *= correction
-        // O += P * V
-        // O /= l
-        \(PV)
-      }
+      // m = reduce(m)
+      \(onlineReduceMaximum())
 
-      """
+      // correction = exp(m_old) / exp(m_new)
+      \(onlineCorrectO())
+
+      // P = softmax(S * scaleFactor)
+      \(softmax(derivative: false))
+
+      // l = reduce(l)
+      \(onlineReduceSum())
+
+      // O *= correction
+      // O += P * V
+      // O /= l
+      \(PV)
+    }
+
+    """
   }
 
   func loopBackwardQuery() -> String {
@@ -247,37 +247,37 @@ extension AttentionKernel {
 
     return """
 
-      // Outer loop over the traversal dimension.
-      for (uint c = 0; c < C; c += \(blockDimensions.traversal)) {
-        // S = Q * K^T
-        \(QKT)
-        \(maskSparsityPattern())
+    // Outer loop over the traversal dimension.
+    for (uint c = 0; c < C; c += \(blockDimensions.traversal)) {
+      // S = Q * K^T
+      \(QKT)
+      \(maskSparsityPattern())
 
-        // P = softmax(S * scaleFactor)
-        \(softmax(derivative: false))
-        
-        // dP = dO * V^T
-        \(dOVT)
-        
-        // dS = P * (dP - D) * scaleFactor
-        \(softmax(derivative: true))
-        
-        // dQ += dS * K
-        \(dSK)
-      }
+      // P = softmax(S * scaleFactor)
+      \(softmax(derivative: false))
 
-      """
+      // dP = dO * V^T
+      \(dOVT)
+
+      // dS = P * (dP - D) * scaleFactor
+      \(softmax(derivative: true))
+
+      // dQ += dS * K
+      \(dSK)
+    }
+
+    """
   }
 
   func loopBackwardKeyValue() -> String {
     var outerProductDesc = AttentionOuterProductDescriptor()
     outerProductDesc.A = .K
     outerProductDesc.B = .Q
-    outerProductDesc.C = .S  // S^T
+    outerProductDesc.C = .S // S^T
     let KQT = outerProduct(descriptor: outerProductDesc)
 
     var accumulateDesc = AttentionAccumulateDescriptor()
-    accumulateDesc.A = .P  // P^T
+    accumulateDesc.A = .P // P^T
     accumulateDesc.B = .dO
     accumulateDesc.C = .dV
     let PTdO = accumulate(descriptor: accumulateDesc)
@@ -285,39 +285,39 @@ extension AttentionKernel {
     outerProductDesc = AttentionOuterProductDescriptor()
     outerProductDesc.A = .V
     outerProductDesc.B = .dO
-    outerProductDesc.C = .dP  // dP^T
+    outerProductDesc.C = .dP // dP^T
     let VdOT = outerProduct(descriptor: outerProductDesc)
 
     accumulateDesc = AttentionAccumulateDescriptor()
-    accumulateDesc.A = .dS  // dS^T
+    accumulateDesc.A = .dS // dS^T
     accumulateDesc.B = .Q
     accumulateDesc.C = .dK
     let dSTQ = accumulate(descriptor: accumulateDesc)
 
     return """
 
-      // Outer loop over the traversal dimension.
-      for (uint r = 0; r < R; r += \(blockDimensions.traversal)) {
-        // S^T = K * Q^T
-        \(KQT)
-        \(maskSparsityPatternTransposed())
+    // Outer loop over the traversal dimension.
+    for (uint r = 0; r < R; r += \(blockDimensions.traversal)) {
+      // S^T = K * Q^T
+      \(KQT)
+      \(maskSparsityPatternTransposed())
 
-        // P^T = exp(S^T - L)
-        \(softmax(derivative: false))
-        
-        // dV += P^T * dO
-        \(PTdO)
-        
-        // dP^T = V * dO^T
-        \(VdOT)
-        
-        // dS^T = P^T * (dP^T - D) * scaleFactor
-        \(softmax(derivative: true))
-        
-        // dK += dS^T * Q
-        \(dSTQ)
-      }
+      // P^T = exp(S^T - L)
+      \(softmax(derivative: false))
 
-      """
+      // dV += P^T * dO
+      \(PTdO)
+
+      // dP^T = V * dO^T
+      \(VdOT)
+
+      // dS^T = P^T * (dP^T - D) * scaleFactor
+      \(softmax(derivative: true))
+
+      // dK += dS^T * Q
+      \(dSTQ)
+    }
+
+    """
   }
 }
