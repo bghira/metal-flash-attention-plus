@@ -797,3 +797,167 @@ func createMetalSimdgroupMatrixStorage() -> String {
   """
   return output
 }
+
+/// Create the source code for runtime quantization kernel headers.
+func createRuntimeQuantizationHeaders() -> String {
+  """
+  // -*- Metal -*-
+  //===-- runtime_quantization_headers -------------------------------------===//
+  // Copyright (c) 2024 Philip Turner. See MIT LICENSE
+  //===----------------------------------------------------------------------===//
+
+  #ifndef __RUNTIME_QUANTIZATION_HEADERS
+  #define __RUNTIME_QUANTIZATION_HEADERS
+
+  // Forward declarations for runtime quantization kernels
+
+  // ============================================================================
+  // TENSOR-WISE QUANTIZATION KERNEL DECLARATIONS
+  // ============================================================================
+
+  // FP32 → INT8 tensor quantization
+  kernel void quantize_tensor_fp32_to_int8(
+      device float *input [[buffer(0)]],
+      device char *output [[buffer(1)]],
+      constant uint &count [[buffer(2)]],
+      constant float &scale [[buffer(3)]],
+      constant int &zero_point [[buffer(4)]],
+      uint gid [[thread_position_in_grid]]
+  );
+
+  // FP16 → INT8 tensor quantization
+  kernel void quantize_tensor_fp16_to_int8(
+      device half *input [[buffer(0)]],
+      device char *output [[buffer(1)]],
+      constant uint &count [[buffer(2)]],
+      constant float &scale [[buffer(3)]],
+      constant int &zero_point [[buffer(4)]],
+      uint gid [[thread_position_in_grid]]
+  );
+
+  // BF16 → INT8 tensor quantization
+  kernel void quantize_tensor_bf16_to_int8(
+      device bfloat *input [[buffer(0)]],
+      device char *output [[buffer(1)]],
+      constant uint &count [[buffer(2)]],
+      constant float &scale [[buffer(3)]],
+      constant int &zero_point [[buffer(4)]],
+      uint gid [[thread_position_in_grid]]
+  );
+
+  // FP32 → INT4 tensor quantization
+  kernel void quantize_tensor_fp32_to_int4(
+      device float *input [[buffer(0)]],
+      device uchar *output [[buffer(1)]],
+      constant uint &count [[buffer(2)]],
+      constant float &scale [[buffer(3)]],
+      constant int &zero_point [[buffer(4)]],
+      uint gid [[thread_position_in_grid]]
+  );
+
+  // FP16 → INT4 tensor quantization
+  kernel void quantize_tensor_fp16_to_int4(
+      device half *input [[buffer(0)]],
+      device uchar *output [[buffer(1)]],
+      constant uint &count [[buffer(2)]],
+      constant float &scale [[buffer(3)]],
+      constant int &zero_point [[buffer(4)]],
+      uint gid [[thread_position_in_grid]]
+  );
+
+  // BF16 → INT4 tensor quantization
+  kernel void quantize_tensor_bf16_to_int4(
+      device bfloat *input [[buffer(0)]],
+      device uchar *output [[buffer(1)]],
+      constant uint &count [[buffer(2)]],
+      constant float &scale [[buffer(3)]],
+      constant int &zero_point [[buffer(4)]],
+      uint gid [[thread_position_in_grid]]
+  );
+
+  // ============================================================================
+  // BLOCK-WISE QUANTIZATION KERNEL DECLARATIONS
+  // ============================================================================
+
+  // FP32 → INT8 block-wise quantization
+  kernel void quantize_blockwise_fp32_to_int8(
+      device float *input [[buffer(0)]],
+      device char *output [[buffer(1)]],
+      device float *scales [[buffer(2)]],
+      constant uint &rows [[buffer(3)]],
+      constant uint &cols [[buffer(4)]],
+      constant uint &block_size [[buffer(5)]],
+      uint3 gid [[threadgroup_position_in_grid]],
+      uint tid [[thread_position_in_threadgroup]],
+      ushort simd_lane_id [[thread_index_in_simdgroup]]
+  );
+
+  // FP16 → INT8 block-wise quantization
+  kernel void quantize_blockwise_fp16_to_int8(
+      device half *input [[buffer(0)]],
+      device char *output [[buffer(1)]],
+      device float *scales [[buffer(2)]],
+      constant uint &rows [[buffer(3)]],
+      constant uint &cols [[buffer(4)]],
+      constant uint &block_size [[buffer(5)]],
+      uint3 gid [[threadgroup_position_in_grid]],
+      uint tid [[thread_position_in_threadgroup]],
+      ushort simd_lane_id [[thread_index_in_simdgroup]]
+  );
+
+  // BF16 → INT8 block-wise quantization
+  kernel void quantize_blockwise_bf16_to_int8(
+      device bfloat *input [[buffer(0)]],
+      device char *output [[buffer(1)]],
+      device float *scales [[buffer(2)]],
+      constant uint &rows [[buffer(3)]],
+      constant uint &cols [[buffer(4)]],
+      constant uint &block_size [[buffer(5)]],
+      uint3 gid [[threadgroup_position_in_grid]],
+      uint tid [[thread_position_in_threadgroup]],
+      ushort simd_lane_id [[thread_index_in_simdgroup]]
+  );
+
+  // ============================================================================
+  // ROW-WISE QUANTIZATION KERNEL DECLARATIONS
+  // ============================================================================
+
+  // FP32 → INT8 row-wise quantization
+  kernel void quantize_rowwise_fp32_to_int8(
+      device float *input [[buffer(0)]],
+      device char *output [[buffer(1)]],
+      device float *scales [[buffer(2)]],
+      constant uint &rows [[buffer(3)]],
+      constant uint &cols [[buffer(4)]],
+      uint gid [[threadgroup_position_in_grid]],
+      uint tid [[thread_position_in_threadgroup]],
+      ushort simd_lane_id [[thread_index_in_simdgroup]]
+  );
+
+  // FP16 → INT8 row-wise quantization
+  kernel void quantize_rowwise_fp16_to_int8(
+      device half *input [[buffer(0)]],
+      device char *output [[buffer(1)]],
+      device float *scales [[buffer(2)]],
+      constant uint &rows [[buffer(3)]],
+      constant uint &cols [[buffer(4)]],
+      uint gid [[threadgroup_position_in_grid]],
+      uint tid [[thread_position_in_threadgroup]],
+      ushort simd_lane_id [[thread_index_in_simdgroup]]
+  );
+
+  // BF16 → INT8 row-wise quantization
+  kernel void quantize_rowwise_bf16_to_int8(
+      device bfloat *input [[buffer(0)]],
+      device char *output [[buffer(1)]],
+      device float *scales [[buffer(2)]],
+      constant uint &rows [[buffer(3)]],
+      constant uint &cols [[buffer(4)]],
+      uint gid [[threadgroup_position_in_grid]],
+      uint tid [[thread_position_in_threadgroup]],
+      ushort simd_lane_id [[thread_index_in_simdgroup]]
+  );
+
+  #endif // __RUNTIME_QUANTIZATION_HEADERS
+  """
+}
