@@ -11,7 +11,6 @@ import Foundation
 
 public extension AttentionKernel {
   func createSource() -> String {
-    print("DEBUG: AttentionKernel.createSource() called for type: \(type)")
     func createLoop() -> String {
       switch type {
       case .forward:
@@ -36,18 +35,80 @@ public extension AttentionKernel {
       \(createBufferBindings())
       threadgroup uchar *threadgroup_block [[threadgroup(0)]],
 
-      uint gid [[threadgroup_position_in_grid]],
+      uint3 gid [[threadgroup_position_in_grid]],  // Now 3D: (block, head, batch)
       ushort sidx [[simdgroup_index_in_threadgroup]],
       ushort lane_id [[thread_index_in_simdgroup]]
     ) {
       ushort2 morton_offset = morton_order(lane_id);
-      uint parallelization_group_offset = gid;
+
+      // Extract dimensions from 3D grid position
+      uint block_id = gid.x;    // Sequence block index
+      uint head_id = gid.y;     // Head index
+      uint batch_id = gid.z;    // Batch index
+
+      // For backward compatibility, compute original parallelization_group_offset
+      uint parallelization_group_offset = block_id;
       parallelization_group_offset *= \(blockDimensions.parallelization);
 
       // Return early if the entire SIMD is out of bounds.
       if (\(parallelizationGroupOffset) >= \(parallelizationDimension)) {
         return;
       }
+
+      // Check if multi-head parameters are provided
+      // For single-head kernels created directly (not via MultiHeadAttention),
+      // these pointers will be null
+      if (num_heads_ptr != nullptr && num_kv_heads_ptr != nullptr &&
+          head_dimension_ptr != nullptr && sequence_length_ptr != nullptr) {
+        // Multi-head attention mode
+        uint num_heads = *num_heads_ptr;
+        uint num_kv_heads = *num_kv_heads_ptr;
+        uint head_dimension = *head_dimension_ptr;
+        uint sequence_length = *sequence_length_ptr;
+
+        // Calculate buffer offsets for multi-head attention
+        // Handle broadcast modes for K/V heads
+        uint kv_head_id = head_id;
+        if (num_kv_heads < num_heads) {
+          // Grouped query attention or multi-query attention
+          kv_head_id = head_id % num_kv_heads;
+        }
+
+        // Calculate offsets for this batch/head combination
+        // Check if stride information is provided for non-contiguous tensor support
+        uint q_batch_head_offset = 0;
+        uint kv_batch_head_offset = 0;
+        uint o_batch_head_offset = 0;
+
+        if (Q_strides != nullptr) {
+          // Use stride-based offset calculation for non-contiguous tensors
+          // Assuming 4D tensor layout: [batch, seq, heads, dim] or [batch, heads, seq, dim]
+          // Strides tell us how to calculate the actual memory offset
+          q_batch_head_offset = batch_id * Q_strides[0] + head_id * Q_strides[2];
+        } else {
+          // Fallback to contiguous layout assumption
+          q_batch_head_offset = (batch_id * num_heads + head_id) * sequence_length * head_dimension;
+        }
+
+        if (K_strides != nullptr && V_strides != nullptr) {
+          kv_batch_head_offset = batch_id * K_strides[0] + kv_head_id * K_strides[2];
+        } else {
+          kv_batch_head_offset = (batch_id * num_kv_heads + kv_head_id) * sequence_length * head_dimension;
+        }
+
+        if (O_strides != nullptr) {
+          o_batch_head_offset = batch_id * O_strides[0] + head_id * O_strides[2];
+        } else {
+          o_batch_head_offset = q_batch_head_offset;  // Output has same shape as query
+        }
+
+        // Apply offsets to buffer pointers based on kernel type
+        // Only apply offsets if we have multiple heads or batches
+        if (num_heads > 1 || batch_id > 0) {
+          \(createBufferOffsets())
+        }
+      }
+      // Otherwise use single-head mode with original pointers
 
       \(createSetup())
       \(createLoop())
@@ -60,9 +121,7 @@ public extension AttentionKernel {
     let sourceURL = URL(fileURLWithPath: "/tmp/quantized_attention_kernel.metal")
     do {
       try source.write(to: sourceURL, atomically: true, encoding: .utf8)
-      print("DEBUG: Kernel source written to /tmp/quantized_attention_kernel.metal")
     } catch {
-      print("DEBUG: Failed to write kernel source: \(error)")
     }
 
     return source
@@ -72,6 +131,41 @@ public extension AttentionKernel {
 // MARK: - Function Signature
 
 extension AttentionKernel {
+  func createBufferOffsets() -> String {
+    switch type {
+    case .forward:
+      return """
+      Q = Q + q_batch_head_offset;
+      K = K + kv_batch_head_offset;
+      V = V + kv_batch_head_offset;
+      O = O + o_batch_head_offset;
+      L = L + (batch_id * num_heads + head_id) * sequence_length;
+      """
+    case .backwardQuery:
+      return """
+      Q = Q + q_batch_head_offset;
+      K = K + kv_batch_head_offset;
+      V = V + kv_batch_head_offset;
+      O = O + o_batch_head_offset;
+      dO = dO + o_batch_head_offset;
+      dQ = dQ + q_batch_head_offset;
+      L = L + (batch_id * num_heads + head_id) * sequence_length;
+      D = D + (batch_id * num_heads + head_id) * sequence_length;
+      """
+    case .backwardKeyValue:
+      return """
+      Q = Q + q_batch_head_offset;
+      K = K + kv_batch_head_offset;
+      V = V + kv_batch_head_offset;
+      dO = dO + o_batch_head_offset;
+      dV = dV + kv_batch_head_offset;
+      dK = dK + kv_batch_head_offset;
+      L = L + (batch_id * num_heads + head_id) * sequence_length;
+      D = D + (batch_id * num_heads + head_id) * sequence_length;
+      """
+    }
+  }
+
   func createConstants() -> String {
     """
 
@@ -84,6 +178,11 @@ extension AttentionKernel {
     constant bool HAS_SLIDING_WINDOW [[function_constant(2)]];
     constant uint WINDOW_SIZE [[function_constant(3)]];
     constant bool IS_CAUSAL [[function_constant(4)]];
+
+    // Blockwise quantization constants
+    constant bool HAS_BLOCKWISE_A [[function_constant(5)]];
+    constant bool HAS_BLOCKWISE_B [[function_constant(6)]];
+    constant uint BLOCK_SIZE_K [[function_constant(7)]];
 
     """
   }
@@ -137,7 +236,97 @@ extension AttentionKernel {
       output +=
         "  constant int32_t &\(operandName)_zero_point [[buffer(\(currentBufferIndex))]], \n"
       currentBufferIndex += 1
+
+      // Quantization strategy selector
+      output +=
+        "  constant uint &\(operandName)_strategy [[buffer(\(currentBufferIndex))]], \n"
+      currentBufferIndex += 1
+
+      // Quantization strategy version for forward compatibility
+      output +=
+        "  constant uint &\(operandName)_strategy_version [[buffer(\(currentBufferIndex))]], \n"
+      currentBufferIndex += 1
     }
+
+    // Third pass: blockwise quantization parameters for quantized operands
+    for operand in operands where isQuantized(operand) {
+      let operandName = "\(operand)".lowercased()
+
+      // Block scales buffer (for per-block quantization)
+      output += "  device const float* \(operandName)_block_scales [[buffer(\(currentBufferIndex))]], \n"
+      currentBufferIndex += 1
+
+      // Block zero points buffer (for per-block quantization)
+      output += "  device const int32_t* \(operandName)_block_zero_points [[buffer(\(currentBufferIndex))]], \n"
+      currentBufferIndex += 1
+
+      // Precomputed sums buffer (optional, mainly for weights)
+      output += "  device const float* \(operandName)_precomputed_sums [[buffer(\(currentBufferIndex))]], \n"
+      currentBufferIndex += 1
+    }
+
+    // Add dummy parameters for operands that are actually referenced in quantization code
+    // This is based on the accumulation patterns in AttentionKernel+Accumulate.swift
+    let definitelyNeededOperands: [AttentionOperand] = []
+
+    // Add P and V since they are used in the accumulate code (P*V -> O)
+    if operands.contains(.V) && !operands.contains(where: { $0 == .V && isQuantized($0) }) {
+      output += "  device const float* v_block_scales [[buffer(\(currentBufferIndex))]], \n"
+      currentBufferIndex += 1
+      output += "  device const int32_t* v_block_zero_points [[buffer(\(currentBufferIndex))]], \n"
+      currentBufferIndex += 1
+      output += "  device const float* v_precomputed_sums [[buffer(\(currentBufferIndex))]], \n"
+      currentBufferIndex += 1
+    }
+
+    // P is always referenced in accumulate code but never in operands (internal matrix)
+    output += "  device const float* p_block_scales [[buffer(\(currentBufferIndex))]], \n"
+    currentBufferIndex += 1
+    output += "  device const int32_t* p_block_zero_points [[buffer(\(currentBufferIndex))]], \n"
+    currentBufferIndex += 1
+    output += "  device const float* p_precomputed_sums [[buffer(\(currentBufferIndex))]], \n"
+    currentBufferIndex += 1
+
+    // Add other operands that might be used in backward passes
+    let backwardOperands: [AttentionOperand] = [.K, .dS, .dO, .dV, .dP, .dK, .dQ]
+    for operand in backwardOperands {
+      if operands.contains(operand) && !operands.contains(where: { $0 == operand && isQuantized($0) }) {
+        let operandName = "\(operand)".lowercased()
+        output += "  device const float* \(operandName)_block_scales [[buffer(\(currentBufferIndex))]], \n"
+        currentBufferIndex += 1
+        output += "  device const int32_t* \(operandName)_block_zero_points [[buffer(\(currentBufferIndex))]], \n"
+        currentBufferIndex += 1
+        output += "  device const float* \(operandName)_precomputed_sums [[buffer(\(currentBufferIndex))]], \n"
+        currentBufferIndex += 1
+      }
+    }
+
+    // Fourth pass: stride information for handling non-contiguous tensors
+    // Add stride buffers for Q, K, V, O tensors to support PyTorch non-contiguous layouts
+    let stridedOperands = [AttentionOperand.Q, AttentionOperand.K, AttentionOperand.V, AttentionOperand.O]
+    for operand in stridedOperands {
+      if !operands.contains(operand) && operand != .O {
+        continue
+      }
+
+      output += "  constant int64_t* \(operand)_strides [[buffer(\(currentBufferIndex))]], \n"
+      currentBufferIndex += 1
+    }
+
+    // Fifth pass: multi-head attention parameters (optional, with default values)
+    output += "  constant uint *num_heads_ptr [[buffer(\(currentBufferIndex))]], \n"
+    currentBufferIndex += 1
+    output += "  constant uint *num_kv_heads_ptr [[buffer(\(currentBufferIndex))]], \n"
+    currentBufferIndex += 1
+    output += "  constant uint *head_dimension_ptr [[buffer(\(currentBufferIndex))]], \n"
+    currentBufferIndex += 1
+    output += "  constant uint *sequence_length_ptr [[buffer(\(currentBufferIndex))]], \n"
+    currentBufferIndex += 1
+
+    output += "  device float *mask_buffer [[buffer(\(currentBufferIndex))]], \n"
+    currentBufferIndex += 1
+    output += "  constant uint &has_mask [[buffer(\(currentBufferIndex))]], \n"
+    currentBufferIndex += 1
 
     return output
   }
@@ -217,6 +406,7 @@ extension AttentionKernel {
       // S = Q * K^T
       \(QKT)
       \(maskAttentionMatrixEdge())
+      \(applyExternalMask())
       \(maskSparsityPattern())
 
       // m = reduce(m)
