@@ -301,6 +301,34 @@ extension AttentionKernel {
     """
   }
 
+  func applyExternalMask() -> String {
+    """
+    if (mask_buffer != nullptr && has_mask != 0) {
+      uint row_idx = \(parallelizationGroupOffset) + morton_offset.y;
+      uint col_base = \(traversalOffset) + c + morton_offset.x;
+
+      if (row_idx < R) {
+        auto S_elements = S_sram[c / 8].thread_elements();
+
+        #pragma clang loop unroll(full)
+        for (ushort index = 0; index < 2; ++index) {
+          uint col_idx = col_base + index;
+          if (col_idx < C) {
+            uint effective_num_heads = (num_heads_ptr != nullptr) ? *num_heads_ptr : 1u;
+            uint effective_batch = (num_heads_ptr != nullptr) ? batch_id : 0u;
+            uint effective_head = (num_heads_ptr != nullptr) ? head_id : 0u;
+
+            ulong mask_index = (((ulong)effective_batch * (ulong)effective_num_heads) + (ulong)effective_head) * (ulong)R;
+            mask_index = (mask_index + (ulong)row_idx) * (ulong)C + (ulong)col_idx;
+            float mask_value = *(mask_buffer + mask_index);
+            (*S_elements)[index] += mask_value;
+          }
+        }
+      }
+    }
+    """
+  }
+
   // Auto-optimization heuristics based on comprehensive benchmarking
   private func shouldUseBitmaskOptimization() -> Bool {
     // Head dimensions where bitmask consistently performs well
