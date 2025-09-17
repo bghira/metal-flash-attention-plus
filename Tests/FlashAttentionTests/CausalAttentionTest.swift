@@ -42,8 +42,8 @@ final class CausalAttentionTest: XCTestCase {
       let Q = device.makeBuffer(length: matrixBytes),
       let K = device.makeBuffer(length: matrixBytes),
       let V = device.makeBuffer(length: matrixBytes),
-      let O = device.makeBuffer(length: matrixBytes),
-      let L = device.makeBuffer(length: sequenceDimension * MemoryLayout<Float>.stride)
+      let _ = device.makeBuffer(length: matrixBytes),
+      let _ = device.makeBuffer(length: sequenceDimension * MemoryLayout<Float>.stride)
     else {
       XCTFail("Failed to create Metal buffers")
       return
@@ -100,8 +100,8 @@ final class CausalAttentionTest: XCTestCase {
       let Q = device.makeBuffer(length: matrixBytes),
       let K = device.makeBuffer(length: matrixBytes),
       let V = device.makeBuffer(length: matrixBytes),
-      let O = device.makeBuffer(length: matrixBytes),
-      let L = device.makeBuffer(length: sequenceDimension * MemoryLayout<Float>.stride)
+      let _ = device.makeBuffer(length: matrixBytes),
+      let _ = device.makeBuffer(length: sequenceDimension * MemoryLayout<Float>.stride)
     else {
       XCTFail("Failed to create Metal buffers")
       return
