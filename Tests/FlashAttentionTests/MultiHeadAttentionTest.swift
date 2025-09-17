@@ -408,6 +408,45 @@ final class MultiHeadAttentionTest: XCTestCase {
     XCTAssertLessThanOrEqual(results["GQA"]!, results["Standard_MHA"]! * 1.1, "GQA should be faster than or similar to Standard MHA")
   }
 
+  func testQuantizationBindingsExposeStrategies() {
+    var baseDescriptor = AttentionDescriptor()
+    baseDescriptor.matrixDimensions = (row: 16, column: 16, head: 16)
+    baseDescriptor.transposeState = (Q: false, K: false, V: false, O: false)
+
+    let shape = MultiHeadShape(batchSize: 1, numHeads: 2, sequenceLength: 16, headDimension: 16)
+
+    var quantParams: [AttentionOperand: QuantizationParameters] = [:]
+    quantParams[.Q] = QuantizationParameters(
+      scale: 0.01,
+      zeroPoint: 0,
+      precision: .INT8,
+      strategy: .symmetric
+    )
+    quantParams[.K] = QuantizationParameters(
+      scale: 0.02,
+      zeroPoint: 3,
+      precision: .INT8,
+      strategy: .asymmetric
+    )
+
+    let descriptor = MultiHeadAttentionDescriptor(
+      baseDescriptor: baseDescriptor,
+      queryShape: shape,
+      keyShape: shape,
+      valueShape: shape,
+      broadcastMode: .standard,
+      dispatchStrategy: .perBatchHead,
+      quantizationParameters: quantParams
+    )
+
+    let bindings = multiHeadAttention.quantizationBindings(for: descriptor)
+    let operandOrder: [AttentionOperand] = bindings.map { $0.operand }
+    XCTAssertEqual(operandOrder, [AttentionOperand.Q, .K])
+    XCTAssertEqual(bindings[0].parameters.strategy, QuantizationStrategy.symmetric)
+    XCTAssertEqual(bindings[1].parameters.strategy, QuantizationStrategy.asymmetric)
+    XCTAssertEqual(bindings.count, 2)
+  }
+
   // MARK: - Helper Methods
 
   private func validateMultiHeadAttention(
@@ -632,6 +671,9 @@ final class MultiHeadAttentionTest: XCTestCase {
   }
 
   private func measureExecutionTime(_ block: () -> Void) -> Double {
+    // Warm up once so the measured pass excludes pipeline compilation and cache misses.
+    block()
+
     let startTime = CFAbsoluteTimeGetCurrent()
     block()
     let endTime = CFAbsoluteTimeGetCurrent()

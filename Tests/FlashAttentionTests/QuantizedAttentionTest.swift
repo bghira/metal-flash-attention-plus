@@ -38,6 +38,8 @@ final class QuantizedAttentionTest: XCTestCase {
       XCTAssertEqual(params.precision, .INT8)
       XCTAssertEqual(params.zeroPoint, 0) // Symmetric quantization
       XCTAssertEqual(params.scale, 10.0 / 127.0, accuracy: 1e-6)
+      XCTAssertEqual(params.strategy, .legacy)
+      XCTAssertEqual(params.strategyVersion, QuantizationParameters.currentStrategyVersion)
     }
 
     // Test INT4 quantization parameter calculation
@@ -50,6 +52,8 @@ final class QuantizedAttentionTest: XCTestCase {
       XCTAssertEqual(params.precision, .INT4)
       XCTAssertEqual(params.zeroPoint, 0) // Symmetric quantization
       XCTAssertEqual(params.scale, 10.0 / 7.0, accuracy: 1e-6)
+      XCTAssertEqual(params.strategy, .legacy)
+      XCTAssertEqual(params.strategyVersion, QuantizationParameters.currentStrategyVersion)
     }
   }
 
@@ -504,5 +508,94 @@ final class QuantizedAttentionTest: XCTestCase {
     XCTAssertLessThan(keyGradNorm, 1000.0, "Key gradients appear too large")
     XCTAssertGreaterThan(valueGradNorm, 0.001, "Value gradients appear to be zero")
     XCTAssertLessThan(valueGradNorm, 1000.0, "Value gradients appear too large")
+  }
+
+  func testKernelSourceIncludesStrategyBuffers() {
+    var baseDescriptor = AttentionDescriptor()
+    baseDescriptor.matrixDimensions = (row: 16, column: 16, head: 16)
+    baseDescriptor.transposeState = (Q: false, K: false, V: false, O: false)
+
+    var config = QuantizedAttention.Configuration()
+    config.queryPrecision = .INT8
+    config.queryStrategy = .symmetric
+
+    let quantDescriptor = QuantizedAttention.QuantizedAttentionDescriptor(
+      baseDescriptor: baseDescriptor,
+      quantizationConfig: config
+    )
+
+    let kernelDescriptor = quantDescriptor.kernelDescriptor(type: .forward)
+    let kernel = AttentionKernel(descriptor: kernelDescriptor)
+    let source = kernel.createSource()
+
+    XCTAssertTrue(
+      source.contains("constant uint &q_strategy [[buffer"),
+      "Generated kernel is missing q_strategy binding"
+    )
+    XCTAssertTrue(
+      source.contains("constant uint &q_strategy_version [[buffer"),
+      "Generated kernel is missing q_strategy_version binding"
+    )
+  }
+
+  func testKernelSourceIncludesOStridesForBackwardKeyValue() {
+    var baseDescriptor = AttentionDescriptor()
+    baseDescriptor.matrixDimensions = (row: 16, column: 16, head: 16)
+    baseDescriptor.transposeState = (Q: false, K: false, V: false, O: false)
+
+    var config = QuantizedAttention.Configuration()
+    config.queryPrecision = .INT8
+    config.keyPrecision = .INT8
+    config.valuePrecision = .INT8
+
+    let quantDescriptor = QuantizedAttention.QuantizedAttentionDescriptor(
+      baseDescriptor: baseDescriptor,
+      quantizationConfig: config
+    )
+
+    let kernelDescriptor = quantDescriptor.kernelDescriptor(type: .backwardKeyValue)
+    let kernel = AttentionKernel(descriptor: kernelDescriptor)
+    let source = kernel.createSource()
+
+    XCTAssertTrue(
+      source.contains("constant int64_t* O_strides [[buffer"),
+      "Generated kernel should always declare O_strides"
+    )
+  }
+
+  func testConfigurationCodableRoundTripPreservesStrategies() throws {
+    var config = QuantizedAttention.Configuration()
+    config.queryPrecision = .INT8
+    config.keyPrecision = .INT8
+    config.valuePrecision = .INT4
+    config.queryStrategy = .symmetric
+    config.keyStrategy = .asymmetric
+    config.valueStrategy = .legacy
+    config.strategyVersion = 42
+
+    let encoder = JSONEncoder()
+    let data = try encoder.encode(config)
+    let decoder = JSONDecoder()
+    let decoded = try decoder.decode(QuantizedAttention.Configuration.self, from: data)
+
+    XCTAssertEqual(decoded.queryStrategy, .symmetric)
+    XCTAssertEqual(decoded.keyStrategy, .asymmetric)
+    XCTAssertEqual(decoded.valueStrategy, .legacy)
+    XCTAssertEqual(decoded.strategyVersion, 42)
+  }
+
+  func testQuantizedTensorFromRespectsStrategy() {
+    let device = MTLCreateSystemDefaultDevice()!
+    let values: [Float] = [1, 2, 3, 4]
+
+    let tensor = QuantizedTensor.from(
+      device: device,
+      floatData: values,
+      shape: [2, 2],
+      precision: .INT8,
+      strategy: .symmetric
+    )
+
+    XCTAssertEqual(tensor.parameters.strategy, .symmetric)
   }
 }
