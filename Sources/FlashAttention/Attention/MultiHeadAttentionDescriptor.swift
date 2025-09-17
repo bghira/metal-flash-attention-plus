@@ -160,13 +160,17 @@ public struct MultiHeadAttentionDescriptor {
   /// Memory layout preference (row-major vs column-major for heads)
   public var headsContiguous: Bool = true
 
+  /// Optional quantization parameters for each operand when tensors are pre-quantized.
+  public var quantizationParameters: [AttentionOperand: QuantizationParameters] = [:]
+
   public init(
     baseDescriptor: AttentionDescriptor,
     queryShape: MultiHeadShape,
     keyShape: MultiHeadShape,
     valueShape: MultiHeadShape,
     broadcastMode: MultiHeadBroadcastMode,
-    dispatchStrategy: MultiHeadDispatchStrategy = .auto
+    dispatchStrategy: MultiHeadDispatchStrategy = .auto,
+    quantizationParameters: [AttentionOperand: QuantizationParameters] = [:]
   ) {
     self.baseDescriptor = baseDescriptor
     self.queryShape = queryShape
@@ -174,6 +178,7 @@ public struct MultiHeadAttentionDescriptor {
     self.valueShape = valueShape
     self.broadcastMode = broadcastMode
     self.dispatchStrategy = dispatchStrategy
+    self.quantizationParameters = quantizationParameters
 
     // Validate broadcast compatibility
     guard broadcastMode.isCompatible(qShape: queryShape, kShape: keyShape, vShape: valueShape) else {
