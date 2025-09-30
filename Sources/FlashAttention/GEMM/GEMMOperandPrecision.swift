@@ -19,7 +19,7 @@
 /// - INT8: 8-bit signed integers with 16-bit or 32-bit accumulation
 /// - INT4: 4-bit integers using optimized GPU instructions (16 levels)
 /// - Scaling factors and zero points stored separately for dequantization
-public enum GEMMOperandPrecision: UInt16 {
+public enum GEMMOperandPrecision: UInt16, Codable {
   case FP32 = 0
   case FP16 = 1
   case BF16 = 2

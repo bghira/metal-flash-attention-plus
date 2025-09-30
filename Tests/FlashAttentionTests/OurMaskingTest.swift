@@ -23,7 +23,7 @@ final class OurMaskingTest: XCTestCase {
 
     print("Testing without causal masking...")
     descriptor.sparsityPattern = .none
-    let nonCausalKernel = AttentionKernel(
+    let _ = AttentionKernel(
       descriptor: descriptor.kernelDescriptor(type: .forward)
     )
     print("✅ Non-causal kernel created")
@@ -42,7 +42,7 @@ final class OurMaskingTest: XCTestCase {
       blockMask: [true, false, false, true],
       blockSize: (row: 2, col: 2)
     )
-    let customKernel = AttentionKernel(
+    let _ = AttentionKernel(
       descriptor: descriptor.kernelDescriptor(type: .forward)
     )
     print("✅ Custom kernel created")

@@ -12,7 +12,7 @@ import Metal
 extension AttentionDescriptor {
   func parameterFile(type: AttentionKernelType) -> String {
     // Choose a function pointer for the parameters.
-    var createParameters: (MTLDevice) -> String = if lowPrecisionInputs, lowPrecisionIntermediates {
+    let createParameters: (MTLDevice) -> String = if lowPrecisionInputs, lowPrecisionIntermediates {
       switch type {
       case .forward:
         Self.forwardMixed(device:)
@@ -20,6 +20,8 @@ extension AttentionDescriptor {
         Self.backwardQueryMixed(device:)
       case .backwardKeyValue:
         Self.backwardKeyValueMixed(device:)
+      case .mlaCompressed:
+        Self.defaultParameters(device:)
       }
     } else {
       switch type {
@@ -29,6 +31,8 @@ extension AttentionDescriptor {
         Self.backwardQuery(device:)
       case .backwardKeyValue:
         Self.backwardKeyValue(device:)
+      case .mlaCompressed:
+        Self.defaultParameters(device:)
       }
     }
 

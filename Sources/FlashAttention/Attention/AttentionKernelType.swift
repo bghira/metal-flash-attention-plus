@@ -5,7 +5,7 @@
 //  Created by Philip Turner on 8/16/24.
 //
 
-/// The three kernels of the FlashAttention algorithm for devices without
+/// The kernels of the FlashAttention algorithm for devices without
 /// hardware acceleration for floating-point atomics.
 public enum AttentionKernelType {
   /// Forward attention, computing O and L.
@@ -20,4 +20,10 @@ public enum AttentionKernelType {
   ///
   /// Depends on L and D.
   case backwardKeyValue
+
+  /// Multi-head Latent Attention with compressed K/V.
+  ///
+  /// Uses dimensional compression to reduce memory footprint
+  /// while maintaining attention quality.
+  case mlaCompressed
 }

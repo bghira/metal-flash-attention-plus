@@ -27,6 +27,8 @@ let package = Package(
       name: "FlashAttention",
       resources: [
         .copy("GEMM/GEMMQuantizedKernels.metal"),
+        .copy("GEMM/GEMMRuntimeQuantization.metal"),
+        .copy("GEMM/GEMMBlockwiseQuantization.metal"),
       ]
     ),
     .testTarget(

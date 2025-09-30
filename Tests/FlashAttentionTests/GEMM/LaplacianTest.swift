@@ -348,7 +348,7 @@ private func profileProblemSize(
       }
 
       // Find the actual result.
-      var actual: Float = if descriptor.transposeState!.A {
+      let actual: Float = if descriptor.transposeState!.A {
         C[n * problemSize + m]
       } else {
         C[m * problemSize + n]

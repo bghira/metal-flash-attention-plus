@@ -386,29 +386,56 @@ extension AttentionKernel {
 
     // MARK: - Inner Loop
 
+    func createRowSumComputation() -> String { """
+    """ }
+
+    func createBlockwiseCompensation(descriptor _: LoopIterationDescriptor) -> String { """
+    """ }
+
     func innerLoopHead(
       descriptor: LoopIterationDescriptor
     )
       -> String
     {
-      """
+      let operandName = "\(B.description.lowercased())"
+      let blockwiseSetup = if isQuantized(B) {
+        """
+        float \(operandName)_tile_scale = \(operandName)_scale;
+        int32_t \(operandName)_tile_zero_point = \(operandName)_zero_point;
+        if (\(blockwiseConstant(B)) && BLOCK_SIZE_K > 0 && \(operandName)_block_scales != nullptr) {
+          uint block_idx = uint(c) / BLOCK_SIZE_K;
+          \(operandName)_tile_scale = \(operandName)_block_scales[block_idx];
+          \(operandName)_tile_zero_point = \(operandName)_block_zero_points[block_idx];
+        }
+        """
+      } else {
+        ""
+      }
+
+      let loadCallString = loadCall(
+        B,
+        src: "\(B)_src",
+        leadingDim: "\(leadingDimensionRHS(descriptor))",
+        origin: "\(B)_origin",
+        transpose: "\(transposed(B))",
+        scaleIdentifier: isQuantized(B) ? "\(operandName)_tile_scale" : nil,
+        zeroPointIdentifier: isQuantized(B) ? "\(operandName)_tile_zero_point" : nil
+      )
+
+      return """
 
       #pragma clang loop unroll(full)
       for (ushort d = 0; d < \(descriptor.registerSize); d += 8) {
         // Load the RHS from memory.
         ushort2 \(B)_origin(d, c);
         simdgroup_matrix_storage<\(registerName(B))> \(B);
-        \(B).\(loadCall(
-          B,
-          src: "\(B)_src",
-          leadingDim: "\(leadingDimensionRHS(descriptor))",
-          origin: "\(B)_origin",
-          transpose: "\(transposed(B))"
-        ));
+        \(blockwiseSetup)
+        \(B).\(loadCallString);
 
         // Issue one SIMD matmul instruction.
         \(C)_sram[(\(descriptor.registerOffset) + d) / 8].multiply(
           \(A)_sram[c / 8], \(B), /*accumulate=*/true);
+
       }
 
       """

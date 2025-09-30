@@ -154,12 +154,18 @@ public extension AttentionDescriptor {
     let device = MTLContext.global.device
     let hasNativeBF16Casting = device.supportsFamily(.apple9)
 
+    // BF16 inputs should use FP32 register precision for accumulation to avoid
+    // overflow/underflow in complex attention patterns that stress accumulation precision
+    let forceFP32AccumulationForBF16 = true
+
     // Inputs have the same register precision across kernels.
     if lowPrecisionInputs {
       registerPrecisions[.Q] = .FP16
       registerPrecisions[.K] = .FP16
       registerPrecisions[.V] = .FP16
-      registerPrecisions[.dO] = hasNativeBF16Casting ? .BF16 : .FP32
+      // Always use FP32 for BF16 dO register precision to prevent accumulation NaNs
+      registerPrecisions[.dO] = (hasNativeBF16Casting && !forceFP32AccumulationForBF16) ? .BF16 :
+        .FP32
     } else {
       registerPrecisions[.Q] = .FP32
       registerPrecisions[.K] = .FP32
@@ -170,7 +176,9 @@ public extension AttentionDescriptor {
     // The register precision of L/D only counts for backward key-value.
     if lowPrecisionIntermediates {
       registerPrecisions[.L] = .FP16
-      registerPrecisions[.D] = hasNativeBF16Casting ? .BF16 : .FP32
+      // Always use FP32 for BF16 D register precision to prevent accumulation NaNs
+      registerPrecisions[.D] = (hasNativeBF16Casting && !forceFP32AccumulationForBF16) ? .BF16 :
+        .FP32
     } else {
       registerPrecisions[.L] = .FP32
       registerPrecisions[.D] = .FP32
@@ -197,7 +205,9 @@ public extension AttentionDescriptor {
       registerPrecisions[.S] = lowPrecisionInputs ? .FP16 : .FP32
       registerPrecisions[.P] = .FP16
       registerPrecisions[.dP] = .FP32
-      registerPrecisions[.dS] = hasNativeBF16Casting ? .BF16 : .FP32
+      // Always use FP32 for BF16 dS register precision to prevent accumulation NaNs
+      registerPrecisions[.dS] = (hasNativeBF16Casting && !forceFP32AccumulationForBF16) ? .BF16 :
+        .FP32
     } else {
       registerPrecisions[.S] = .FP32
       registerPrecisions[.P] = .FP32

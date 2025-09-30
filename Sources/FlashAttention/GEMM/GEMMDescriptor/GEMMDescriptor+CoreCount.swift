@@ -39,9 +39,13 @@
 
     // Check if the entry is valid
     if gpuEntry == MACH_PORT_NULL {
-      fatalError(
-        "Error getting GPU entry at \(#file):\(#line - 5)"
-      )
+      // Fallback for CI/VM environments where IORegistry queries may fail
+      // Release the iterator before returning
+      IOObjectRelease(iterator)
+
+      // Return a reasonable default core count for GitHub CI
+      // Most M1/M2 have 8-10 GPU cores, so 8 is a safe default
+      return 8
     }
 
     // Release the iterator

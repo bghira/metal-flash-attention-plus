@@ -129,7 +129,7 @@ public struct GEMMKernel {
     )
       -> UInt16
     {
-      var expectedLeading: UInt16 = if transposeState {
+      let expectedLeading: UInt16 = if transposeState {
         untransposedRows
       } else {
         untransposedColumns

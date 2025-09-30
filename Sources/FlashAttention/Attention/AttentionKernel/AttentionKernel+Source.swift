@@ -7,6 +7,8 @@
 
 // Top level specification of the code structure.
 
+import Foundation
+
 public extension AttentionKernel {
   func createSource() -> String {
     func createLoop() -> String {
@@ -17,10 +19,12 @@ public extension AttentionKernel {
         loopBackwardQuery()
       case .backwardKeyValue:
         loopBackwardKeyValue()
+      case .mlaCompressed:
+        "" // MLA uses a separate kernel, not this template
       }
     }
 
-    return """
+    let source = """
 
     \(createMetalSimdgroupEvent())
     \(createMetalSimdgroupMatrixStorage())
@@ -33,12 +37,19 @@ public extension AttentionKernel {
       \(createBufferBindings())
       threadgroup uchar *threadgroup_block [[threadgroup(0)]],
 
-      uint gid [[threadgroup_position_in_grid]],
+      uint3 gid [[threadgroup_position_in_grid]],  // Now 3D: (block, head, batch)
       ushort sidx [[simdgroup_index_in_threadgroup]],
       ushort lane_id [[thread_index_in_simdgroup]]
     ) {
       ushort2 morton_offset = morton_order(lane_id);
-      uint parallelization_group_offset = gid;
+
+      // Extract dimensions from 3D grid position
+      uint block_id = gid.x;    // Sequence block index
+      uint head_id = gid.y;     // Head index
+      uint batch_id = gid.z;    // Batch index
+
+      // For backward compatibility, compute original parallelization_group_offset
+      uint parallelization_group_offset = block_id;
       parallelization_group_offset *= \(blockDimensions.parallelization);
 
       // Return early if the entire SIMD is out of bounds.
@@ -46,18 +57,115 @@ public extension AttentionKernel {
         return;
       }
 
+      // Check if multi-head parameters are provided
+      // For single-head kernels created directly (not via MultiHeadAttention),
+      // these pointers will be null
+      if (num_heads_ptr != nullptr && num_kv_heads_ptr != nullptr &&
+          head_dimension_ptr != nullptr && sequence_length_ptr != nullptr) {
+        // Multi-head attention mode
+        uint num_heads = *num_heads_ptr;
+        uint num_kv_heads = *num_kv_heads_ptr;
+        uint head_dimension = *head_dimension_ptr;
+        uint sequence_length = *sequence_length_ptr;
+
+        // Calculate buffer offsets for multi-head attention
+        // Handle broadcast modes for K/V heads
+        uint kv_head_id = head_id;
+        if (num_kv_heads < num_heads) {
+          // Grouped query attention or multi-query attention
+          kv_head_id = head_id % num_kv_heads;
+        }
+
+        // Calculate offsets for this batch/head combination
+        // Check if stride information is provided for non-contiguous tensor support
+        uint q_batch_head_offset = 0;
+        uint kv_batch_head_offset = 0;
+        uint o_batch_head_offset = 0;
+
+        if (Q_strides != nullptr) {
+          // Use stride-based offset calculation for non-contiguous tensors
+          // Assuming 4D tensor layout: [batch, seq, heads, dim] or [batch, heads, seq, dim]
+          // Strides tell us how to calculate the actual memory offset
+          q_batch_head_offset = batch_id * Q_strides[0] + head_id * Q_strides[2];
+        } else {
+          // Fallback to contiguous layout assumption
+          q_batch_head_offset = (batch_id * num_heads + head_id) * sequence_length * head_dimension;
+        }
+
+        if (K_strides != nullptr && V_strides != nullptr) {
+          kv_batch_head_offset = batch_id * K_strides[0] + kv_head_id * K_strides[2];
+        } else {
+          kv_batch_head_offset = (batch_id * num_kv_heads + kv_head_id) * sequence_length * head_dimension;
+        }
+
+        o_batch_head_offset = q_batch_head_offset;  // Output has same shape as query
+
+        // Apply offsets to buffer pointers based on kernel type
+        // Only apply offsets if we have multiple heads or batches
+        if (num_heads > 1 || batch_id > 0) {
+          \(createBufferOffsets())
+        }
+      }
+      // Otherwise use single-head mode with original pointers
+
       \(createSetup())
       \(createLoop())
       \(createCleanup(type: type))
     }
 
     """
+
+    // Force write source to file for debugging
+    let sourceURL = URL(fileURLWithPath: "/tmp/quantized_attention_kernel.metal")
+    do {
+      try source.write(to: sourceURL, atomically: true, encoding: .utf8)
+    } catch {}
+
+    return source
   }
 }
 
 // MARK: - Function Signature
 
 extension AttentionKernel {
+  func createBufferOffsets() -> String {
+    switch type {
+    case .forward:
+      """
+      Q = Q + q_batch_head_offset;
+      K = K + kv_batch_head_offset;
+      V = V + kv_batch_head_offset;
+      O = O + o_batch_head_offset;
+      L = L + (batch_id * num_heads + head_id) * sequence_length;
+      """
+    case .backwardQuery:
+      """
+      Q = Q + q_batch_head_offset;
+      K = K + kv_batch_head_offset;
+      V = V + kv_batch_head_offset;
+      O = O + o_batch_head_offset;
+      dO = dO + o_batch_head_offset;
+      dQ = dQ + q_batch_head_offset;
+      L = L + (batch_id * num_heads + head_id) * sequence_length;
+      D = D + (batch_id * num_heads + head_id) * sequence_length;
+      """
+    case .mlaCompressed:
+      // MLA uses a separate kernel implementation
+      ""
+    case .backwardKeyValue:
+      """
+      Q = Q + q_batch_head_offset;
+      K = K + kv_batch_head_offset;
+      V = V + kv_batch_head_offset;
+      dO = dO + o_batch_head_offset;
+      dV = dV + kv_batch_head_offset;
+      dK = dK + kv_batch_head_offset;
+      L = L + (batch_id * num_heads + head_id) * sequence_length;
+      D = D + (batch_id * num_heads + head_id) * sequence_length;
+      """
+    }
+  }
+
   func createConstants() -> String {
     """
 
@@ -70,6 +178,18 @@ extension AttentionKernel {
     constant bool HAS_SLIDING_WINDOW [[function_constant(2)]];
     constant uint WINDOW_SIZE [[function_constant(3)]];
     constant bool IS_CAUSAL [[function_constant(4)]];
+
+    // Blockwise quantization constants per operand
+    constant bool HAS_BLOCKWISE_Q [[function_constant(5)]];
+    constant bool HAS_BLOCKWISE_K [[function_constant(6)]];
+    constant bool HAS_BLOCKWISE_V [[function_constant(7)]];
+    constant uint BLOCK_SIZE_K [[function_constant(8)]];
+
+    // Sparse masking and broadcast metadata
+    constant bool HAS_SPARSE_RANGES [[function_constant(9)]];
+    constant bool HAS_BLOCK_SPARSE [[function_constant(10)]];
+    constant bool IS_MQA_MODE [[function_constant(11)]];
+    constant uint NUM_KV_HEADS [[function_constant(12)]];
 
     """
   }
@@ -93,6 +213,10 @@ extension AttentionKernel {
       operands += [.Q, .K, .V]
       operands += [.dO, .dV, .dK]
       operands += [.L, .D]
+    case .mlaCompressed:
+      // MLA has different operands: Q, KV_latent, W_decompress_k, W_decompress_v, O
+      // For compatibility, use standard operands
+      operands += [.Q, .O]
     }
     operands.sort {
       $0.bufferBinding! < $1.bufferBinding!
@@ -123,7 +247,57 @@ extension AttentionKernel {
       output +=
         "  constant int32_t &\(operandName)_zero_point [[buffer(\(currentBufferIndex))]], \n"
       currentBufferIndex += 1
+
+      // Quantization strategy selector
+      output +=
+        "  constant uint &\(operandName)_strategy [[buffer(\(currentBufferIndex))]], \n"
+      currentBufferIndex += 1
+
+      // Quantization strategy version for forward compatibility
+      output +=
+        "  constant uint &\(operandName)_strategy_version [[buffer(\(currentBufferIndex))]], \n"
+      currentBufferIndex += 1
     }
+
+    // Third pass: blockwise quantization parameters for quantized operands
+    for operand in operands where isQuantized(operand) {
+      let operandName = "\(operand)".lowercased()
+
+      // Block scales buffer (for per-block quantization)
+      output +=
+        "  device const float* \(operandName)_block_scales [[buffer(\(currentBufferIndex))]], \n"
+      currentBufferIndex += 1
+
+      // Block zero points buffer (for per-block quantization)
+      output +=
+        "  device const int32_t* \(operandName)_block_zero_points [[buffer(\(currentBufferIndex))]], \n"
+      currentBufferIndex += 1
+    }
+
+    // Fourth pass: stride information for handling non-contiguous tensors
+    // Add stride buffers for Q, K, V, O tensors to support PyTorch non-contiguous layouts
+    let stridedOperands = [AttentionOperand.Q, AttentionOperand.K, AttentionOperand.V]
+    for operand in stridedOperands {
+      if !operands.contains(operand) {
+        continue
+      }
+
+      output += "  constant int64_t* \(operand)_strides [[buffer(\(currentBufferIndex))]], \n"
+      currentBufferIndex += 1
+    }
+
+    // Fifth pass: multi-head attention parameters (optional, with default values)
+    output += "  constant uint *num_heads_ptr [[buffer(\(currentBufferIndex))]], \n"
+    currentBufferIndex += 1
+    output += "  constant uint *num_kv_heads_ptr [[buffer(\(currentBufferIndex))]], \n"
+    currentBufferIndex += 1
+    output += "  constant uint *head_dimension_ptr [[buffer(\(currentBufferIndex))]], \n"
+    currentBufferIndex += 1
+    output += "  constant uint *sequence_length_ptr [[buffer(\(currentBufferIndex))]], \n"
+    currentBufferIndex += 1
+
+    output += "  device char *mask_buffer_bytes [[buffer(\(currentBufferIndex))]], \n"
+    currentBufferIndex += 1
 
     return output
   }
@@ -203,6 +377,7 @@ extension AttentionKernel {
       // S = Q * K^T
       \(QKT)
       \(maskAttentionMatrixEdge())
+      \(applyExternalMask())
       \(maskSparsityPattern())
 
       // m = reduce(m)
@@ -212,7 +387,7 @@ extension AttentionKernel {
       \(onlineCorrectO())
 
       // P = softmax(S * scaleFactor)
-      \(softmax(derivative: false))
+      \(optimizedSoftmax(derivative: false))
 
       // l = reduce(l)
       \(onlineReduceSum())
@@ -254,13 +429,13 @@ extension AttentionKernel {
       \(maskSparsityPattern())
 
       // P = softmax(S * scaleFactor)
-      \(softmax(derivative: false))
+      \(optimizedSoftmax(derivative: false))
 
       // dP = dO * V^T
       \(dOVT)
 
       // dS = P * (dP - D) * scaleFactor
-      \(softmax(derivative: true))
+      \(optimizedSoftmax(derivative: true))
 
       // dQ += dS * K
       \(dSK)
@@ -303,7 +478,7 @@ extension AttentionKernel {
       \(maskSparsityPatternTransposed())
 
       // P^T = exp(S^T - L)
-      \(softmax(derivative: false))
+      \(optimizedSoftmax(derivative: false))
 
       // dV += P^T * dO
       \(PTdO)
@@ -312,7 +487,7 @@ extension AttentionKernel {
       \(VdOT)
 
       // dS^T = P^T * (dP^T - D) * scaleFactor
-      \(softmax(derivative: true))
+      \(optimizedSoftmax(derivative: true))
 
       // dK += dS^T * Q
       \(dSTQ)
