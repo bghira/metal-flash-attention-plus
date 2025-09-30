@@ -10,8 +10,6 @@ Single-headed attention only, to focus on the core bottlenecks of different atte
 
 Following the [GLUON](https://github.com/triton-lang/triton/blob/main/python/examples/gluon/01-attention-forward.py) example from the Triton project, mutliple optimisations have been implemented with adjustments for the Metal hardware API.
 
-The details of our improvements can be found [on the dedicated GLUON page](/docs/attic/GLUON_OPTIMIZATIONS_SUMMARY.md) with a [full correctness report](/docs/attic/CORRECTNESS_ANALYSIS.md).
-
 ## Masking Support
 
 This implementation now supports attention masking for both causal (autoregressive) and custom masking patterns. The masking is implemented efficiently at the Metal kernel level, applying masks before the softmax operation to prevent unwanted attention connections. The backend automatically selects whether to vectorise the mask depending on the shape.
