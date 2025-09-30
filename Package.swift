@@ -28,6 +28,7 @@ let package = Package(
       resources: [
         .copy("GEMM/GEMMQuantizedKernels.metal"),
         .copy("GEMM/GEMMRuntimeQuantization.metal"),
+        .copy("GEMM/GEMMBlockwiseQuantization.metal"),
       ]
     ),
     .testTarget(
