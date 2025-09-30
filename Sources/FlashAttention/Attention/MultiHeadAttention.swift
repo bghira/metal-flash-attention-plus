@@ -44,29 +44,38 @@ public class MultiHeadAttention {
       return nil
     }
 
-    switch descriptor.dispatchStrategy {
+    var resolvedDescriptor = descriptor
+    if var sparseMask = resolvedDescriptor.baseDescriptor.sparseMask {
+      sparseMask.isMQA = resolvedDescriptor.broadcastMode.isMultiQuery
+      sparseMask.numKVHeads = resolvedDescriptor.keyShape.numHeads
+      resolvedDescriptor.baseDescriptor.sparseMask = sparseMask
+    }
+
+    let resolvedMaskBuffer = maskBuffer ?? resolvedDescriptor.baseDescriptor.sparseMask?.maskBuffer
+
+    switch resolvedDescriptor.dispatchStrategy {
     case .perBatchHead:
       return dispatchPerBatchHead(
         commandBuffer: commandBuffer,
         query: query, key: key, value: value, output: output,
-        logsumexp: logsumexp, descriptor: descriptor,
-        maskBuffer: maskBuffer
+        logsumexp: logsumexp, descriptor: resolvedDescriptor,
+        maskBuffer: resolvedMaskBuffer
       )
 
     case .perBatch:
       return dispatchPerBatch(
         commandBuffer: commandBuffer,
         query: query, key: key, value: value, output: output,
-        logsumexp: logsumexp, descriptor: descriptor,
-        maskBuffer: maskBuffer
+        logsumexp: logsumexp, descriptor: resolvedDescriptor,
+        maskBuffer: resolvedMaskBuffer
       )
 
     case .batched, .auto:
       return dispatchBatched(
         commandBuffer: commandBuffer,
         query: query, key: key, value: value, output: output,
-        logsumexp: logsumexp, descriptor: descriptor,
-        maskBuffer: maskBuffer
+        logsumexp: logsumexp, descriptor: resolvedDescriptor,
+        maskBuffer: resolvedMaskBuffer
       )
     }
   }
@@ -142,12 +151,8 @@ public class MultiHeadAttention {
 
     if let maskBuffer {
       encoder.setBuffer(maskBuffer, offset: 0, index: multiHeadParamIndex + 4)
-      var hasMask: UInt32 = 1
-      encoder.setBytes(&hasMask, length: MemoryLayout<UInt32>.size, index: multiHeadParamIndex + 5)
     } else {
       encoder.setBuffer(nil, offset: 0, index: multiHeadParamIndex + 4)
-      var hasMask: UInt32 = 0
-      encoder.setBytes(&hasMask, length: MemoryLayout<UInt32>.size, index: multiHeadParamIndex + 5)
     }
 
     // Set threadgroup memory
@@ -261,12 +266,8 @@ public class MultiHeadAttention {
 
     if let maskBuffer {
       encoder.setBuffer(maskBuffer, offset: 0, index: multiHeadParamIndex + 4)
-      var hasMask: UInt32 = 1
-      encoder.setBytes(&hasMask, length: MemoryLayout<UInt32>.size, index: multiHeadParamIndex + 5)
     } else {
       encoder.setBuffer(nil, offset: 0, index: multiHeadParamIndex + 4)
-      var hasMask: UInt32 = 0
-      encoder.setBytes(&hasMask, length: MemoryLayout<UInt32>.size, index: multiHeadParamIndex + 5)
     }
 
     // Set threadgroup memory

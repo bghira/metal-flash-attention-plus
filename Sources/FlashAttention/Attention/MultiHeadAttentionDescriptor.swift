@@ -95,6 +95,16 @@ public enum MultiHeadBroadcastMode {
   }
 }
 
+public extension MultiHeadBroadcastMode {
+  var isMultiQuery: Bool {
+    if case .multiQuery = self {
+      return true
+    }
+    return false
+  }
+
+}
+
 /// Multi-head attention kernel dispatch strategy
 public enum MultiHeadDispatchStrategy {
   /// Dispatch one kernel per batch item and head (maximum parallelism)
@@ -187,7 +197,12 @@ public struct MultiHeadAttentionDescriptor {
   }
 
   /// Create legacy single-head descriptor for compatibility
-  public func legacyDescriptor(batchIndex: UInt32, headIndex: UInt32) -> AttentionDescriptor {
+  public func legacyDescriptor(
+    batchIndex: UInt32,
+    headIndex: UInt32,
+    kvHeadIndex overrideKVHeadIndex: UInt32? = nil
+  ) -> AttentionDescriptor {
+    _ = overrideKVHeadIndex
     var descriptor = baseDescriptor
 
     // Set matrix dimensions for single head
@@ -200,6 +215,12 @@ public struct MultiHeadAttentionDescriptor {
       column: kvSeqLen,
       head: headDim
     )
+
+    if var sparseMask = descriptor.sparseMask {
+      sparseMask.isMQA = broadcastMode.isMultiQuery
+      sparseMask.numKVHeads = keyShape.numHeads
+      descriptor.sparseMask = sparseMask
+    }
 
     return descriptor
   }
