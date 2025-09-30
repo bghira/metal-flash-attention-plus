@@ -17,6 +17,7 @@ public struct AttentionKernel {
   var preferAsyncLoad: Bool
   var registerPrecisions: [AttentionOperand: GEMMOperandPrecision]
   var transposeState: [AttentionOperand: Bool]
+  var sparseMask: AttentionDescriptor.SparseMaskDescriptor?
 
   // Layout of the data in registers and threadgroup memory.
   public var blockDimensions:
@@ -47,6 +48,7 @@ public struct AttentionKernel {
     self.preferAsyncLoad = preferAsyncLoad
     registerPrecisions = descriptor.registerPrecisions
     transposeState = descriptor.transposeState
+    sparseMask = descriptor.sparseMask
 
     self.blockDimensions = blockDimensions
     self.headDimension = headDimension
@@ -62,6 +64,25 @@ public struct AttentionKernel {
     // Pick the threadgroup memory allocation size.
     threadgroupMemoryAllocation = .zero
     threadgroupMemoryAllocation = createThreadgroupMemoryAllocation()
+
+    if let sparseMask {
+      let requiresValidation: Bool
+      switch sparseMask.maskType {
+      case .dense:
+        requiresValidation = false
+      case .sparseRanges, .blockSparse:
+        requiresValidation = true
+      }
+
+      if requiresValidation {
+        precondition(
+          descriptor.validateSparseConfiguration(
+            baseThreadgroupMemory: Int(threadgroupMemoryAllocation)
+          ),
+          "Sparse configuration exceeds 48KB threadgroup memory budget."
+        )
+      }
+    }
   }
 }
 
@@ -190,16 +211,37 @@ extension AttentionKernel {
     return memoryPrecision == .INT8 || memoryPrecision == .INT4
   }
 
+  func blockwiseConstant(_ operand: AttentionOperand) -> String {
+    switch operand {
+    case .Q, .dQ:
+      return "HAS_BLOCKWISE_Q"
+    case .K, .dK:
+      return "HAS_BLOCKWISE_K"
+    case .V, .dV:
+      return "HAS_BLOCKWISE_V"
+    default:
+      return "false"
+    }
+  }
+
   func loadCall(
-    _ operand: AttentionOperand, src: String, leadingDim: String, origin: String, transpose: String
+    _ operand: AttentionOperand,
+    src: String,
+    leadingDim: String,
+    origin: String,
+    transpose: String,
+    scaleIdentifier: String? = nil,
+    zeroPointIdentifier: String? = nil
   )
     -> String
   {
     if isQuantized(operand) {
       // For quantized operands, we need to include scale and zero_point parameters
       let operandName = "\(operand)".lowercased()
+      let scale = scaleIdentifier ?? "\(operandName)_scale"
+      let zeroPoint = zeroPointIdentifier ?? "\(operandName)_zero_point"
       return
-        "\(loadFunction(operand))(\n              \(src), \(leadingDim),\n              \(origin), \(operandName)_scale, \(operandName)_zero_point, \(transpose))"
+        "\(loadFunction(operand))(\n              \(src), \(leadingDim),\n              \(origin), \(scale), \(zeroPoint), \(transpose))"
     } else {
       // For non-quantized operands, use the standard parameters
       return
@@ -238,6 +280,14 @@ extension AttentionKernel {
       case .O, .dO: blockDimensions.traversal
       default: fatalError("Unrecognized operand.")
       }
+
+    case .mlaCompressed:
+      // MLA has different operands, return default block dimensions
+      switch operand {
+      case .Q, .dQ: blockDimensions.parallelization
+      case .O, .dO: blockDimensions.parallelization
+      default: blockDimensions.traversal
+      }
     }
   }
 
@@ -265,6 +315,8 @@ extension AttentionKernel {
       "R"
     case .backwardKeyValue:
       "C"
+    case .mlaCompressed:
+      "R"
     }
   }
 
@@ -286,6 +338,8 @@ extension AttentionKernel {
       "C"
     case .backwardKeyValue:
       "R"
+    case .mlaCompressed:
+      "C"
     }
   }
 
@@ -295,6 +349,8 @@ extension AttentionKernel {
       "c"
     case .backwardKeyValue:
       "r"
+    case .mlaCompressed:
+      "c"
     }
   }
 
@@ -394,6 +450,11 @@ extension AttentionKernel {
       // dK += dS^T * Q
       allocateParallelization(.dK)
       allocateTraversal(.Q)
+
+    case .mlaCompressed:
+      // MLA uses separate kernel, minimal allocation for compatibility
+      allocateParallelization(.Q)
+      allocateParallelization(.O)
     }
 
     // dO * O
