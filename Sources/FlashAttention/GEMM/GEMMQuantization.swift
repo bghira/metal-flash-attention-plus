@@ -55,7 +55,7 @@ extension QuantizationMode {
     switch self {
     case .tensorWise:
       try container.encode(CaseName.tensorWise, forKey: .caseName)
-    case .blockwise(let blockSizeK, let bothOperands):
+    case let .blockwise(blockSizeK, bothOperands):
       try container.encode(CaseName.blockwise, forKey: .caseName)
       try container.encode(blockSizeK, forKey: .blockSize)
       try container.encode(bothOperands, forKey: .bothOperands)
@@ -121,8 +121,8 @@ public struct QuantizationParameters: Codable {
     self.zeroPoint = zeroPoint
     self.precision = precision
     self.mode = mode
-    self.additionalScales = nil
-    self.additionalZeroPoints = nil
+    additionalScales = nil
+    additionalZeroPoints = nil
     self.strategy = strategy
     self.strategyVersion = strategyVersion
 
@@ -143,16 +143,16 @@ public struct QuantizationParameters: Codable {
     strategy: QuantizationStrategy = .legacy,
     strategyVersion: UInt8 = QuantizationParameters.currentStrategyVersion
   ) {
-    self.scale = scales.first ?? 1.0
-    self.zeroPoint = zeroPoints.first ?? 0
+    scale = scales.first ?? 1.0
+    zeroPoint = zeroPoints.first ?? 0
     self.precision = precision
     self.mode = mode
-    self.additionalScales = scales.count > 1 ? Array(scales.dropFirst()) : nil
-    self.additionalZeroPoints = zeroPoints.count > 1 ? Array(zeroPoints.dropFirst()) : nil
+    additionalScales = scales.count > 1 ? Array(scales.dropFirst()) : nil
+    additionalZeroPoints = zeroPoints.count > 1 ? Array(zeroPoints.dropFirst()) : nil
     self.strategy = strategy
     self.strategyVersion = strategyVersion
 
-    let allZeroPoints = zeroPoints.isEmpty ? [self.zeroPoint] : zeroPoints
+    let allZeroPoints = zeroPoints.isEmpty ? [zeroPoint] : zeroPoints
     QuantizationParameters.validate(
       strategy: strategy,
       zeroPoints: allZeroPoints,
@@ -169,7 +169,9 @@ public struct QuantizationParameters: Codable {
   ) {
     guard precision.requiresQuantizationParameters else {
       if strategy != .legacy {
-        print("Warning: Ignoring \(strategy) strategy for precision \(precision); quantization parameters are unused.")
+        print(
+          "Warning: Ignoring \(strategy) strategy for precision \(precision); quantization parameters are unused."
+        )
       }
       return
     }
@@ -177,10 +179,12 @@ public struct QuantizationParameters: Codable {
     guard strategy == .symmetric else { return }
 
     if let nonZero = zeroPoints.first(where: { $0 != 0 }) {
-      preconditionFailure("Symmetric quantization requires zero points to be zero; found \(nonZero).")
+      preconditionFailure(
+        "Symmetric quantization requires zero points to be zero; found \(nonZero)."
+      )
     }
 
-    if case .blockwise(let blockSize, _) = mode {
+    if case let .blockwise(blockSize, _) = mode {
       precondition(
         blockSize % 8 == 0,
         "Symmetric block-wise quantization requires block sizes that are multiples of 8."
@@ -207,15 +211,20 @@ public struct QuantizationParameters: Codable {
     precision = try container.decode(GEMMOperandPrecision.self, forKey: .precision)
     mode = try container.decode(QuantizationMode.self, forKey: .mode)
     additionalScales = try container.decodeIfPresent([Float].self, forKey: .additionalScales)
-    additionalZeroPoints = try container.decodeIfPresent([Int32].self, forKey: .additionalZeroPoints)
-    strategy = try container.decodeIfPresent(QuantizationStrategy.self, forKey: .strategy) ?? .legacy
-    strategyVersion = try container.decodeIfPresent(UInt8.self, forKey: .strategyVersion) ?? QuantizationParameters.currentStrategyVersion
+    additionalZeroPoints = try container.decodeIfPresent(
+      [Int32].self,
+      forKey: .additionalZeroPoints
+    )
+    strategy = try container
+      .decodeIfPresent(QuantizationStrategy.self, forKey: .strategy) ?? .legacy
+    strategyVersion = try container
+      .decodeIfPresent(UInt8.self, forKey: .strategyVersion) ?? QuantizationParameters
+      .currentStrategyVersion
 
-    let stackedZeroPoints: [Int32]
-    if let extras = additionalZeroPoints, !extras.isEmpty {
-      stackedZeroPoints = [zeroPoint] + extras
+    let stackedZeroPoints: [Int32] = if let extras = additionalZeroPoints, !extras.isEmpty {
+      [zeroPoint] + extras
     } else {
-      stackedZeroPoints = [zeroPoint]
+      [zeroPoint]
     }
 
     QuantizationParameters.validate(
@@ -254,14 +263,15 @@ public extension GEMMOperandPrecision {
     shape: [Int] = [],
     mode: QuantizationMode = .tensorWise,
     strategy: QuantizationStrategy = .legacy
-  ) -> QuantizationParameters
+  )
+    -> QuantizationParameters
   {
     switch mode {
     case .tensorWise:
-      return calculateTensorWiseParameters(data: data, count: count, strategy: strategy)
+      calculateTensorWiseParameters(data: data, count: count, strategy: strategy)
 
-    case .blockwise(let blockSize, _):
-      return calculateBlockWiseParameters(
+    case let .blockwise(blockSize, _):
+      calculateBlockWiseParameters(
         data: data,
         count: count,
         shape: shape,
@@ -270,7 +280,7 @@ public extension GEMMOperandPrecision {
       )
 
     case .rowWise:
-      return calculateRowWiseParameters(data: data, count: count, shape: shape, strategy: strategy)
+      calculateRowWiseParameters(data: data, count: count, shape: shape, strategy: strategy)
     }
   }
 
@@ -279,7 +289,9 @@ public extension GEMMOperandPrecision {
     data: UnsafePointer<Float>,
     count: Int,
     strategy: QuantizationStrategy
-  ) -> QuantizationParameters {
+  )
+    -> QuantizationParameters
+  {
     // Find min and max values across entire tensor
     var minVal = Float.greatestFiniteMagnitude
     var maxVal = -Float.greatestFiniteMagnitude
@@ -327,7 +339,9 @@ public extension GEMMOperandPrecision {
     shape: [Int],
     blockSize: Int,
     strategy: QuantizationStrategy
-  ) -> QuantizationParameters {
+  )
+    -> QuantizationParameters
+  {
     guard shape.count >= 2 else {
       // Fall back to tensor-wise if shape is insufficient
       return calculateTensorWiseParameters(data: data, count: count, strategy: strategy)
@@ -395,7 +409,9 @@ public extension GEMMOperandPrecision {
     count: Int,
     shape: [Int],
     strategy: QuantizationStrategy
-  ) -> QuantizationParameters {
+  )
+    -> QuantizationParameters
+  {
     guard shape.count >= 2 else {
       // Fall back to tensor-wise if shape is insufficient
       return calculateTensorWiseParameters(data: data, count: count, strategy: strategy)
@@ -539,7 +555,7 @@ public class QuantizedTensor: Codable {
   public let precomputedSums: MTLBuffer?
 
   public init(
-    device: MTLDevice,
+    device _: MTLDevice,
     data: MTLBuffer,
     parameters: QuantizationParameters,
     elementCount: Int,
@@ -552,7 +568,7 @@ public class QuantizedTensor: Codable {
     self.data = data
     self.parameters = parameters
     self.elementCount = elementCount
-    self.originalShape = shape
+    originalShape = shape
     self.blockScales = blockScales
     self.blockZeroPoints = blockZeroPoints
     self.blockSizeK = blockSizeK
@@ -603,7 +619,7 @@ public class QuantizedTensor: Codable {
       bufferSize = precision == .INT4 ? (elementCount + 1) / 2 : elementCount * precision.size
 
       // Extract blockSizeK from mode if it's blockwise
-      if case .blockwise(let blockSize, _) = mode {
+      if case let .blockwise(blockSize, _) = mode {
         finalBlockSizeK = blockSize
       }
     } else {
@@ -712,7 +728,7 @@ public class QuantizedTensor: Codable {
 
   /// Create aligned buffer with 64-byte alignment
   private static func createAlignedBuffer(device: MTLDevice, size: Int) -> MTLBuffer? {
-    let alignedSize = (size + 63) & ~63  // Round up to 64-byte boundary
+    let alignedSize = (size + 63) & ~63 // Round up to 64-byte boundary
     return device.makeBuffer(length: alignedSize, options: .storageModeShared)
   }
 
@@ -758,15 +774,15 @@ public class QuantizedTensor: Codable {
     try container.encode(serializeBuffer(data), forKey: .data)
 
     // Serialize optional block-wise buffers
-    if let blockScales = blockScales {
+    if let blockScales {
       try container.encode(serializeBuffer(blockScales), forKey: .blockScales)
     }
 
-    if let blockZeroPoints = blockZeroPoints {
+    if let blockZeroPoints {
       try container.encode(serializeBuffer(blockZeroPoints), forKey: .blockZeroPoints)
     }
 
-    if let precomputedSums = precomputedSums {
+    if let precomputedSums {
       try container.encode(serializeBuffer(precomputedSums), forKey: .precomputedSums)
     }
   }
@@ -857,16 +873,18 @@ public class QuantizedTensor: Codable {
       var codingPath: [CodingKey] { baseDecoder.codingPath }
       var userInfo: [CodingUserInfoKey: Any] { baseDecoder.userInfo }
 
-      func container<Key>(keyedBy type: Key.Type) throws -> KeyedDecodingContainer<Key> where Key: CodingKey {
-        return try baseDecoder.container(keyedBy: type)
+      func container<Key>(keyedBy type: Key.Type) throws -> KeyedDecodingContainer<Key>
+        where Key: CodingKey
+      {
+        try baseDecoder.container(keyedBy: type)
       }
 
       func unkeyedContainer() throws -> UnkeyedDecodingContainer {
-        return try baseDecoder.unkeyedContainer()
+        try baseDecoder.unkeyedContainer()
       }
 
       func singleValueContainer() throws -> SingleValueDecodingContainer {
-        return try baseDecoder.singleValueContainer()
+        try baseDecoder.singleValueContainer()
       }
     }
 

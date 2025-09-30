@@ -26,7 +26,7 @@ public class MLAOptimizedGEMMMFA {
     (M: 512, N: 512, K: 512),
     (M: 1024, N: 1024, K: 1024),
     (M: 2048, N: 2048, K: 2048),
-    (M: 512, N: 512, K: 1024),  // Asymmetric sizes
+    (M: 512, N: 512, K: 1024), // Asymmetric sizes
     (M: 1024, N: 512, K: 512),
   ]
 
@@ -70,9 +70,10 @@ public class MLAOptimizedGEMMMFA {
     )
 
     // Initialize with random weights (Xavier/Glorot)
-    if let kPtr = wDecompressK?.contents().bindMemory(
-      to: Float16.self, capacity: kvLatentDim * totalDim
-    ),
+    if
+      let kPtr = wDecompressK?.contents().bindMemory(
+        to: Float16.self, capacity: kvLatentDim * totalDim
+      ),
       let vPtr = wDecompressV?.contents().bindMemory(
         to: Float16.self, capacity: kvLatentDim * totalDim
       )
@@ -159,13 +160,14 @@ public class MLAOptimizedGEMMMFA {
     headDim: Int,
     kvLatentDim: Int
   ) throws {
-    guard let wDecompressK = wDecompressK,
-      let wDecompressV = wDecompressV
+    guard
+      let wDecompressK,
+      let wDecompressV
     else {
       throw NSError(
         domain: "MLAOptimizedGEMMMFA", code: 1,
         userInfo: [
-          NSLocalizedDescriptionKey: "Weights not initialized"
+          NSLocalizedDescriptionKey: "Weights not initialized",
         ]
       )
     }
@@ -187,13 +189,14 @@ public class MLAOptimizedGEMMMFA {
     decompressedK = self.decompressedK
     decompressedV = self.decompressedV
 
-    guard let kBuf = decompressedK,
+    guard
+      let kBuf = decompressedK,
       let vBuf = decompressedV
     else {
       throw NSError(
         domain: "MLAOptimizedGEMMMFA", code: 2,
         userInfo: [
-          NSLocalizedDescriptionKey: "Failed to allocate buffers"
+          NSLocalizedDescriptionKey: "Failed to allocate buffers",
         ]
       )
     }

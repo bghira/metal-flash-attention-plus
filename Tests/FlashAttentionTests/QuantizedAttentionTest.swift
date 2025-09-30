@@ -558,10 +558,18 @@ final class QuantizedAttentionTest: XCTestCase {
     let layout = QuantizedKernelLayoutManifest.layout(for: .backwardKeyValue)
 
     // Verify O_strides is assigned in the layout
-    XCTAssertNotEqual(layout.oStrides, -1, "O_strides should be assigned in backward key-value layout")
+    XCTAssertNotEqual(
+      layout.oStrides,
+      -1,
+      "O_strides should be assigned in backward key-value layout"
+    )
 
     // Verify O_strides is within Metal's buffer limit (0-30)
-    XCTAssertLessThanOrEqual(layout.oStrides, 30, "O_strides buffer index must be <= 30 for Metal compatibility")
+    XCTAssertLessThanOrEqual(
+      layout.oStrides,
+      30,
+      "O_strides buffer index must be <= 30 for Metal compatibility"
+    )
     XCTAssertGreaterThanOrEqual(layout.oStrides, 0, "O_strides buffer index must be >= 0")
   }
 
@@ -661,7 +669,9 @@ private extension QuantizedAttentionTest {
     gradOutput: [Float],
     logsumexp: [Float],
     descriptor: AttentionDescriptor
-  ) -> (dQ: [Float], dK: [Float], dV: [Float]) {
+  )
+    -> (dQ: [Float], dK: [Float], dV: [Float])
+  {
     guard let dims = descriptor.matrixDimensions else {
       return (
         dQ: Array(repeating: 0, count: query.count),

@@ -398,9 +398,8 @@ extension AttentionKernel {
       -> String
     {
       let operandName = "\(B.description.lowercased())"
-      let blockwiseSetup: String
-      if isQuantized(B) {
-        blockwiseSetup = """
+      let blockwiseSetup = if isQuantized(B) {
+        """
         float \(operandName)_tile_scale = \(operandName)_scale;
         int32_t \(operandName)_tile_zero_point = \(operandName)_zero_point;
         if (\(blockwiseConstant(B)) && BLOCK_SIZE_K > 0 && \(operandName)_block_scales != nullptr) {
@@ -410,7 +409,7 @@ extension AttentionKernel {
         }
         """
       } else {
-        blockwiseSetup = ""
+        ""
       }
 
       let loadCallString = loadCall(

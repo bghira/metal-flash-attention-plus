@@ -70,47 +70,47 @@ public enum QuantizedKernelLayoutManifest {
       }
     }
 
-    assign(.qData, &next, &slots)             // 0
-    assign(.kData, &next, &slots)             // 1
-    assign(.vData, &next, &slots)             // 2
+    assign(.qData, &next, &slots) // 0
+    assign(.kData, &next, &slots) // 1
+    assign(.vData, &next, &slots) // 2
 
     let primaryOutputIndex = next
     assignSame([.output, .gradOutput], primaryOutputIndex, &slots)
-    next += 1                                 // 3
+    next += 1 // 3
 
-    assign(.logsumexp, &next, &slots)         // 4
-    assign(.gradQuery, &next, &slots)         // 5
-    assign(.dValues, &next, &slots)           // 6
-    assign(.gradKey, &next, &slots)           // 7
-    assign(.gradValue, &next, &slots)         // 8
+    assign(.logsumexp, &next, &slots) // 4
+    assign(.gradQuery, &next, &slots) // 5
+    assign(.dValues, &next, &slots) // 6
+    assign(.gradKey, &next, &slots) // 7
+    assign(.gradValue, &next, &slots) // 8
 
-    assign(.qScale, &next, &slots)            // 9
-    assign(.qZeroPoint, &next, &slots)        // 10
-    assign(.kScale, &next, &slots)            // 11
-    assign(.kZeroPoint, &next, &slots)        // 12
-    assign(.vScale, &next, &slots)            // 13
-    assign(.vZeroPoint, &next, &slots)        // 14
+    assign(.qScale, &next, &slots) // 9
+    assign(.qZeroPoint, &next, &slots) // 10
+    assign(.kScale, &next, &slots) // 11
+    assign(.kZeroPoint, &next, &slots) // 12
+    assign(.vScale, &next, &slots) // 13
+    assign(.vZeroPoint, &next, &slots) // 14
 
-    assign(.dims, &next, &slots)              // 15
-    assign(.steClipRange, &next, &slots)      // 16
+    assign(.dims, &next, &slots) // 15
+    assign(.steClipRange, &next, &slots) // 16
 
-    assign(.qBlockScales, &next, &slots)      // 17
-    assign(.qBlockZeroPoints, &next, &slots)  // 18
-    assign(.kBlockScales, &next, &slots)      // 19
-    assign(.kBlockZeroPoints, &next, &slots)  // 20
-    assign(.vBlockScales, &next, &slots)      // 21
-    assign(.vBlockZeroPoints, &next, &slots)  // 22
+    assign(.qBlockScales, &next, &slots) // 17
+    assign(.qBlockZeroPoints, &next, &slots) // 18
+    assign(.kBlockScales, &next, &slots) // 19
+    assign(.kBlockZeroPoints, &next, &slots) // 20
+    assign(.vBlockScales, &next, &slots) // 21
+    assign(.vBlockZeroPoints, &next, &slots) // 22
 
-    assign(.qPrecomputedSums, &next, &slots)  // 23
-    assign(.kPrecomputedSums, &next, &slots)  // 24
-    assign(.vPrecomputedSums, &next, &slots)  // 25
+    assign(.qPrecomputedSums, &next, &slots) // 23
+    assign(.kPrecomputedSums, &next, &slots) // 24
+    assign(.vPrecomputedSums, &next, &slots) // 25
 
-    assign(.qStrides, &next, &slots)          // 26
-    assign(.kStrides, &next, &slots)          // 27
-    assign(.vStrides, &next, &slots)          // 28
-    assign(.oStrides, &next, &slots)          // 29
+    assign(.qStrides, &next, &slots) // 26
+    assign(.kStrides, &next, &slots) // 27
+    assign(.vStrides, &next, &slots) // 28
+    assign(.oStrides, &next, &slots) // 29
 
-    assign(.maskBuffer, &next, &slots)        // 30
+    assign(.maskBuffer, &next, &slots) // 30
 
     // Metal only supports buffer indices 0-30, so we've reached the limit.
     // For scalar metadata parameters, we'll remove them from the buffer layout
@@ -135,7 +135,7 @@ public enum QuantizedKernelLayoutManifest {
 
     fileprivate init(kernel: Kernel, keys: [Key]) {
       self.kernel = kernel
-      self.indices = Dictionary(uniqueKeysWithValues: keys.compactMap { key in
+      indices = Dictionary(uniqueKeysWithValues: keys.compactMap { key in
         guard let value = slotTable[key] else {
           return nil
         }
@@ -165,7 +165,7 @@ public enum QuantizedKernelLayoutManifest {
       .qStrides, .kStrides, .vStrides, .oStrides,
       .maskBuffer,
       .numHeads, .numKeyValueHeads, .headDimension, .sequenceLength,
-      .scratch0, .scratch1
+      .scratch0, .scratch1,
     ]
   )
 
@@ -178,7 +178,7 @@ public enum QuantizedKernelLayoutManifest {
       .dims, .steClipRange,
       .qBlockScales, .qBlockZeroPoints, .kBlockScales, .kBlockZeroPoints,
       .vBlockScales, .vBlockZeroPoints,
-      .qStrides, .kStrides, .vStrides, .oStrides
+      .qStrides, .kStrides, .vStrides, .oStrides,
       // Removed: numHeads, numKeyValueHeads, headDimension, sequenceLength, scratch0, scratch1
       // These exceed Metal's buffer limit and are unused or can be derived from dims
     ]
@@ -193,7 +193,7 @@ public enum QuantizedKernelLayoutManifest {
       .dims, .steClipRange,
       .qBlockScales, .qBlockZeroPoints, .kBlockScales, .kBlockZeroPoints,
       .vBlockScales, .vBlockZeroPoints,
-      .qStrides, .kStrides, .vStrides, .oStrides
+      .qStrides, .kStrides, .vStrides, .oStrides,
       // Removed: numHeads, numKeyValueHeads, headDimension, sequenceLength, scratch0, scratch1
       // These exceed Metal's buffer limit and are unused or can be derived from dims
     ]
@@ -206,7 +206,7 @@ public enum QuantizedKernelLayoutManifest {
       // For compatibility, map to standard buffer slots
       .qData, .output,
       .numHeads, .headDimension, .sequenceLength,
-      .scratch0, .scratch1
+      .scratch0, .scratch1,
     ]
   )
 

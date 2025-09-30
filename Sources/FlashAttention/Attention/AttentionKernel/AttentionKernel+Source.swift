@@ -14,13 +14,13 @@ public extension AttentionKernel {
     func createLoop() -> String {
       switch type {
       case .forward:
-        return loopForward()
+        loopForward()
       case .backwardQuery:
-        return loopBackwardQuery()
+        loopBackwardQuery()
       case .backwardKeyValue:
-        return loopBackwardKeyValue()
+        loopBackwardKeyValue()
       case .mlaCompressed:
-        return "" // MLA uses a separate kernel, not this template
+        "" // MLA uses a separate kernel, not this template
       }
     }
 
@@ -119,8 +119,7 @@ public extension AttentionKernel {
     let sourceURL = URL(fileURLWithPath: "/tmp/quantized_attention_kernel.metal")
     do {
       try source.write(to: sourceURL, atomically: true, encoding: .utf8)
-    } catch {
-    }
+    } catch {}
 
     return source
   }
@@ -132,7 +131,7 @@ extension AttentionKernel {
   func createBufferOffsets() -> String {
     switch type {
     case .forward:
-      return """
+      """
       Q = Q + q_batch_head_offset;
       K = K + kv_batch_head_offset;
       V = V + kv_batch_head_offset;
@@ -140,7 +139,7 @@ extension AttentionKernel {
       L = L + (batch_id * num_heads + head_id) * sequence_length;
       """
     case .backwardQuery:
-      return """
+      """
       Q = Q + q_batch_head_offset;
       K = K + kv_batch_head_offset;
       V = V + kv_batch_head_offset;
@@ -152,9 +151,9 @@ extension AttentionKernel {
       """
     case .mlaCompressed:
       // MLA uses a separate kernel implementation
-      return ""
+      ""
     case .backwardKeyValue:
-      return """
+      """
       Q = Q + q_batch_head_offset;
       K = K + kv_batch_head_offset;
       V = V + kv_batch_head_offset;
@@ -265,11 +264,13 @@ extension AttentionKernel {
       let operandName = "\(operand)".lowercased()
 
       // Block scales buffer (for per-block quantization)
-      output += "  device const float* \(operandName)_block_scales [[buffer(\(currentBufferIndex))]], \n"
+      output +=
+        "  device const float* \(operandName)_block_scales [[buffer(\(currentBufferIndex))]], \n"
       currentBufferIndex += 1
 
       // Block zero points buffer (for per-block quantization)
-      output += "  device const int32_t* \(operandName)_block_zero_points [[buffer(\(currentBufferIndex))]], \n"
+      output +=
+        "  device const int32_t* \(operandName)_block_zero_points [[buffer(\(currentBufferIndex))]], \n"
       currentBufferIndex += 1
     }
 

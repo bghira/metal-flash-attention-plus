@@ -787,7 +787,7 @@ private func profileProblemSize(
     case .backwardKeyValue:
       4 * headDimension + 5
     case .mlaCompressed:
-      2 * headDimension + 5  // Similar to forward pass
+      2 * headDimension + 5 // Similar to forward pass
     }
     operations *= (sequenceDimension * sequenceDimension)
     operations *= dispatchCount

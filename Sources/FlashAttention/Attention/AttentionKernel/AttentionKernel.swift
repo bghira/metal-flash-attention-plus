@@ -66,12 +66,11 @@ public struct AttentionKernel {
     threadgroupMemoryAllocation = createThreadgroupMemoryAllocation()
 
     if let sparseMask {
-      let requiresValidation: Bool
-      switch sparseMask.maskType {
+      let requiresValidation = switch sparseMask.maskType {
       case .dense:
-        requiresValidation = false
+        false
       case .sparseRanges, .blockSparse:
-        requiresValidation = true
+        true
       }
 
       if requiresValidation {
@@ -214,13 +213,13 @@ extension AttentionKernel {
   func blockwiseConstant(_ operand: AttentionOperand) -> String {
     switch operand {
     case .Q, .dQ:
-      return "HAS_BLOCKWISE_Q"
+      "HAS_BLOCKWISE_Q"
     case .K, .dK:
-      return "HAS_BLOCKWISE_K"
+      "HAS_BLOCKWISE_K"
     case .V, .dV:
-      return "HAS_BLOCKWISE_V"
+      "HAS_BLOCKWISE_V"
     default:
-      return "false"
+      "false"
     }
   }
 

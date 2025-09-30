@@ -1,11 +1,13 @@
 import Metal
 
-public struct SparseMQABuilder {
+public enum SparseMQABuilder {
   public static func buildSlidingWindow(
     sequenceLength: Int,
     windowSize: Int,
     device: MTLDevice
-  ) -> MTLBuffer {
+  )
+    -> MTLBuffer
+  {
     let cappedWindow = max(1, windowSize)
     let length = sequenceLength * MemoryLayout<UInt32>.stride * 2
     guard let buffer = device.makeBuffer(length: length, options: [.storageModeShared]) else {
@@ -29,7 +31,9 @@ public struct SparseMQABuilder {
     pattern: [[Bool]],
     blockSize: Int,
     device: MTLDevice
-  ) -> MTLBuffer {
+  )
+    -> MTLBuffer
+  {
     let rows = pattern.count
     let length = rows * MemoryLayout<UInt32>.stride * 2
     guard let buffer = device.makeBuffer(length: length, options: [.storageModeShared]) else {
@@ -38,8 +42,10 @@ public struct SparseMQABuilder {
 
     buffer.contents().withMemoryRebound(to: UInt32.self, capacity: rows * 2) { pointer in
       for (rowIndex, rowPattern) in pattern.enumerated() {
-        if let firstActive = rowPattern.firstIndex(of: true),
-           let lastActive = rowPattern.lastIndex(of: true) {
+        if
+          let firstActive = rowPattern.firstIndex(of: true),
+          let lastActive = rowPattern.lastIndex(of: true)
+        {
           let start = UInt32(firstActive * blockSize)
           let maxColumns = rowPattern.count * blockSize
           let end = UInt32(min((lastActive + 1) * blockSize, maxColumns))
