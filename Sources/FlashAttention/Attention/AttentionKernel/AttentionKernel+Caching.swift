@@ -369,6 +369,10 @@ extension AttentionKernel {
       if cached(.dV) {
         output += allocate(operand: .dV)
       }
+
+    case .mlaCompressed:
+      // MLA uses a completely different kernel and does not use template-based caching
+      break
     }
 
     return output
@@ -438,6 +442,10 @@ extension AttentionKernel {
       if cached(.dV) {
         output += cache(operand: .dV, type: .store)
       }
+
+    case .mlaCompressed:
+      // MLA uses a completely different kernel and does not use template-based caching
+      break
     }
 
     return output
