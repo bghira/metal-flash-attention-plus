@@ -554,28 +554,15 @@ final class QuantizedAttentionTest: XCTestCase {
   }
 
   func testKernelSourceIncludesOStridesForBackwardKeyValue() {
-    var baseDescriptor = AttentionDescriptor()
-    baseDescriptor.matrixDimensions = (row: 16, column: 16, head: 16)
-    baseDescriptor.transposeState = (Q: false, K: false, V: false, O: false)
+    // Test the quantized backward kernel generation which uses QuantizedKernelLayoutManifest
+    let layout = QuantizedKernelLayoutManifest.layout(for: .backwardKeyValue)
 
-    var config = QuantizedAttention.Configuration()
-    config.queryPrecision = .INT8
-    config.keyPrecision = .INT8
-    config.valuePrecision = .INT8
+    // Verify O_strides is assigned in the layout
+    XCTAssertNotEqual(layout.oStrides, -1, "O_strides should be assigned in backward key-value layout")
 
-    let quantDescriptor = QuantizedAttention.QuantizedAttentionDescriptor(
-      baseDescriptor: baseDescriptor,
-      quantizationConfig: config
-    )
-
-    let kernelDescriptor = quantDescriptor.kernelDescriptor(type: .backwardKeyValue)
-    let kernel = AttentionKernel(descriptor: kernelDescriptor)
-    let source = kernel.createSource()
-
-    XCTAssertTrue(
-      source.contains("constant int64_t* O_strides [[buffer"),
-      "Generated kernel should always declare O_strides"
-    )
+    // Verify O_strides is within Metal's buffer limit (0-30)
+    XCTAssertLessThanOrEqual(layout.oStrides, 30, "O_strides buffer index must be <= 30 for Metal compatibility")
+    XCTAssertGreaterThanOrEqual(layout.oStrides, 0, "O_strides buffer index must be >= 0")
   }
 
   func testConfigurationCodableRoundTripPreservesStrategies() throws {

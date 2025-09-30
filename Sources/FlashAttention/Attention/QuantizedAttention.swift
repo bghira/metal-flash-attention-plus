@@ -1561,14 +1561,12 @@ extension QuantizedAttention {
         constant int64_t *K_strides [[buffer(\(layout.kStrides))]],
         constant int64_t *V_strides [[buffer(\(layout.vStrides))]],
         constant int64_t *O_strides [[buffer(\(layout.oStrides))]],
-        constant uint &num_heads [[buffer(\(layout.numHeads))]],
-        constant uint &num_kv_heads [[buffer(\(layout.numKeyValueHeads))]],
-        constant uint &head_dimension [[buffer(\(layout.headDimension))]],
-        constant uint &sequence_length [[buffer(\(layout.sequenceLength))]],
-        device float *scratch0 [[buffer(\(layout.scratch0))]],
-        device float *scratch1 [[buffer(\(layout.scratch1))]],
         uint2 gid [[thread_position_in_grid]]
     ) {
+        // Extract dimensions from dims buffer {M, N, K}
+        uint M = dims.x, N = dims.y, K_dim = dims.z;
+        uint row = gid.y, col = gid.x;
+
         (void)q_block_scales;
         (void)q_block_zero_points;
         (void)k_block_scales;
@@ -1579,15 +1577,6 @@ extension QuantizedAttention {
         (void)K_strides;
         (void)V_strides;
         (void)O_strides;
-        (void)num_heads;
-        (void)num_kv_heads;
-        (void)head_dimension;
-        (void)sequence_length;
-        (void)scratch0;
-        (void)scratch1;
-
-        uint M = dims.x, N = dims.y, K_dim = dims.z;
-        uint row = gid.y, col = gid.x;
 
         if (row >= M || col >= K_dim) return;
 
@@ -1692,14 +1681,11 @@ extension QuantizedAttention {
         constant int64_t *K_strides [[buffer(\(layout.kStrides))]],
         constant int64_t *V_strides [[buffer(\(layout.vStrides))]],
         constant int64_t *O_strides [[buffer(\(layout.oStrides))]],
-        constant uint &num_heads [[buffer(\(layout.numHeads))]],
-        constant uint &num_kv_heads [[buffer(\(layout.numKeyValueHeads))]],
-        constant uint &head_dimension [[buffer(\(layout.headDimension))]],
-        constant uint &sequence_length [[buffer(\(layout.sequenceLength))]],
-        device float *scratch0 [[buffer(\(layout.scratch0))]],
-        device float *scratch1 [[buffer(\(layout.scratch1))]],
         uint2 gid [[thread_position_in_grid]]
     ) {
+        // Extract dimensions from dims buffer {M, N, K}
+        uint M = dims.x, N = dims.y, K_dim = dims.z;
+
         (void)q_block_scales;
         (void)q_block_zero_points;
         (void)k_block_scales;
@@ -1710,14 +1696,6 @@ extension QuantizedAttention {
         (void)K_strides;
         (void)V_strides;
         (void)O_strides;
-        (void)num_heads;
-        (void)num_kv_heads;
-        (void)head_dimension;
-        (void)sequence_length;
-        (void)scratch0;
-        (void)scratch1;
-
-        uint M = dims.x, N = dims.y, K_dim = dims.z;
         uint row = gid.y, col = gid.x;
 
         if (row >= N || col >= K_dim) return;

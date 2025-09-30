@@ -112,13 +112,18 @@ public enum QuantizedKernelLayoutManifest {
 
     assign(.maskBuffer, &next, &slots)        // 30
 
-    assign(.numHeads, &next, &slots)          // 31
-    assign(.numKeyValueHeads, &next, &slots)  // 32
-    assign(.headDimension, &next, &slots)     // 33
-    assign(.sequenceLength, &next, &slots)    // 34
+    // Metal only supports buffer indices 0-30, so we've reached the limit.
+    // For scalar metadata parameters, we'll remove them from the buffer layout
+    // and pass them as function constants or pack into existing buffers.
+    // scratch0 and scratch1 are removed from backward passes (unused).
 
-    assign(.scratch0, &next, &slots)          // 35
-    assign(.scratch1, &next, &slots)          // 36
+    // Mark these as unavailable (-1) for kernels that don't use them
+    slots[.numHeads] = -1
+    slots[.numKeyValueHeads] = -1
+    slots[.headDimension] = -1
+    slots[.sequenceLength] = -1
+    slots[.scratch0] = -1
+    slots[.scratch1] = -1
 
     return slots
   }()
@@ -173,9 +178,9 @@ public enum QuantizedKernelLayoutManifest {
       .dims, .steClipRange,
       .qBlockScales, .qBlockZeroPoints, .kBlockScales, .kBlockZeroPoints,
       .vBlockScales, .vBlockZeroPoints,
-      .qStrides, .kStrides, .vStrides, .oStrides,
-      .numHeads, .numKeyValueHeads, .headDimension, .sequenceLength,
-      .scratch0, .scratch1
+      .qStrides, .kStrides, .vStrides, .oStrides
+      // Removed: numHeads, numKeyValueHeads, headDimension, sequenceLength, scratch0, scratch1
+      // These exceed Metal's buffer limit and are unused or can be derived from dims
     ]
   )
 
@@ -188,9 +193,9 @@ public enum QuantizedKernelLayoutManifest {
       .dims, .steClipRange,
       .qBlockScales, .qBlockZeroPoints, .kBlockScales, .kBlockZeroPoints,
       .vBlockScales, .vBlockZeroPoints,
-      .qStrides, .kStrides, .vStrides, .oStrides,
-      .numHeads, .numKeyValueHeads, .headDimension, .sequenceLength,
-      .scratch0, .scratch1
+      .qStrides, .kStrides, .vStrides, .oStrides
+      // Removed: numHeads, numKeyValueHeads, headDimension, sequenceLength, scratch0, scratch1
+      // These exceed Metal's buffer limit and are unused or can be derived from dims
     ]
   )
 
