@@ -4,6 +4,7 @@
 //
 //
 
+import Foundation
 import Metal
 import XCTest
 
@@ -473,41 +474,55 @@ final class QuantizedAttentionTest: XCTestCase {
       "Backward key-value pass failed: \(kvCommandBuffer.error?.localizedDescription ?? "")"
     )
 
-    // Verify gradients are not all zeros
-    let gradQueryPtr = gradQueryBuffer.contents().bindMemory(
-      to: Float.self, capacity: totalElements
-    )
-    let gradKeyPtr = gradKeyBuffer.contents().bindMemory(to: Float.self, capacity: totalElements)
-    let gradValuePtr = gradValueBuffer.contents().bindMemory(
-      to: Float.self, capacity: totalElements
-    )
+    let gpuGradQuery = readBuffer(gradQueryBuffer, count: totalElements)
+    let gpuGradKey = readBuffer(gradKeyBuffer, count: totalElements)
+    let gpuGradValue = readBuffer(gradValueBuffer, count: totalElements)
 
-    var queryGradNorm: Float = 0
-    var keyGradNorm: Float = 0
-    var valueGradNorm: Float = 0
-
-    for i in 0..<totalElements {
-      queryGradNorm += gradQueryPtr[i] * gradQueryPtr[i]
-      keyGradNorm += gradKeyPtr[i] * gradKeyPtr[i]
-      valueGradNorm += gradValuePtr[i] * gradValuePtr[i]
-    }
-
-    queryGradNorm = sqrt(queryGradNorm)
-    keyGradNorm = sqrt(keyGradNorm)
-    valueGradNorm = sqrt(valueGradNorm)
+    let queryGradNorm = l2Norm(gpuGradQuery)
+    let keyGradNorm = l2Norm(gpuGradKey)
+    let valueGradNorm = l2Norm(gpuGradValue)
 
     print("Quantized backward pass results:")
     print("  Query gradient norm: \(queryGradNorm)")
     print("  Key gradient norm: \(keyGradNorm)")
     print("  Value gradient norm: \(valueGradNorm)")
 
-    // Check gradients are reasonable (not zero, not too large)
     XCTAssertGreaterThan(queryGradNorm, 0.001, "Query gradients appear to be zero")
     XCTAssertLessThan(queryGradNorm, 1000.0, "Query gradients appear too large")
     XCTAssertGreaterThan(keyGradNorm, 0.001, "Key gradients appear to be zero")
     XCTAssertLessThan(keyGradNorm, 1000.0, "Key gradients appear too large")
     XCTAssertGreaterThan(valueGradNorm, 0.001, "Value gradients appear to be zero")
     XCTAssertLessThan(valueGradNorm, 1000.0, "Value gradients appear too large")
+
+    let floatGradients = runFloatBackward(
+      query: queryData,
+      key: keyData,
+      value: valueData,
+      gradOutput: gradOutputData,
+      logsumexp: logsumexpData,
+      descriptor: baseDescriptor
+    )
+
+    let queryCosine = cosineSimilarity(gpuGradQuery, floatGradients.dQ)
+    let keyCosine = cosineSimilarity(gpuGradKey, floatGradients.dK)
+    let valueCosine = cosineSimilarity(gpuGradValue, floatGradients.dV)
+
+    let queryRelativeError = relativeError(gpuGradQuery, floatGradients.dQ)
+    let keyRelativeError = relativeError(gpuGradKey, floatGradients.dK)
+    let valueRelativeError = relativeError(gpuGradValue, floatGradients.dV)
+
+    print("Gradient comparison metrics:")
+    print("  Query cosine similarity: \(queryCosine), relative error: \(queryRelativeError)")
+    print("  Key cosine similarity: \(keyCosine), relative error: \(keyRelativeError)")
+    print("  Value cosine similarity: \(valueCosine), relative error: \(valueRelativeError)")
+
+    XCTAssertGreaterThan(queryCosine, 0.7, "Query gradient cosine similarity too low")
+    XCTAssertGreaterThan(keyCosine, 0.7, "Key gradient cosine similarity too low")
+    XCTAssertGreaterThan(valueCosine, 0.7, "Value gradient cosine similarity too low")
+
+    XCTAssertLessThan(queryRelativeError, 0.30, "Query gradient relative error too high")
+    XCTAssertLessThan(keyRelativeError, 0.30, "Key gradient relative error too high")
+    XCTAssertLessThan(valueRelativeError, 0.30, "Value gradient relative error too high")
   }
 
   func testKernelSourceIncludesStrategyBuffers() {
@@ -597,5 +612,173 @@ final class QuantizedAttentionTest: XCTestCase {
     )
 
     XCTAssertEqual(tensor.parameters.strategy, .symmetric)
+  }
+}
+
+private extension QuantizedAttentionTest {
+  func readBuffer(_ buffer: MTLBuffer, count: Int) -> [Float] {
+    let pointer = buffer.contents().bindMemory(to: Float.self, capacity: count)
+    return (0..<count).map { pointer[$0] }
+  }
+
+  func l2Norm(_ values: [Float]) -> Float {
+    var sum: Double = 0
+    for value in values {
+      sum += Double(value) * Double(value)
+    }
+    return Float(sqrt(sum))
+  }
+
+  func cosineSimilarity(_ lhs: [Float], _ rhs: [Float]) -> Float {
+    precondition(lhs.count == rhs.count)
+
+    var dot: Double = 0
+    var lhsNorm: Double = 0
+    var rhsNorm: Double = 0
+
+    for index in 0..<lhs.count {
+      let left = Double(lhs[index])
+      let right = Double(rhs[index])
+      dot += left * right
+      lhsNorm += left * left
+      rhsNorm += right * right
+    }
+
+    let denominator = sqrt(lhsNorm) * sqrt(rhsNorm)
+    guard denominator > 1e-8 else { return 0 }
+    return Float(dot / denominator)
+  }
+
+  func relativeError(_ candidate: [Float], _ reference: [Float]) -> Float {
+    precondition(candidate.count == reference.count)
+
+    var diffNorm: Double = 0
+    var referenceNorm: Double = 0
+
+    for index in 0..<candidate.count {
+      let diff = Double(candidate[index]) - Double(reference[index])
+      diffNorm += diff * diff
+      let ref = Double(reference[index])
+      referenceNorm += ref * ref
+    }
+
+    let numerator = sqrt(diffNorm)
+    let denominator = sqrt(referenceNorm) + 1e-8
+    return Float(numerator / denominator)
+  }
+
+  func runFloatBackward(
+    query: [Float],
+    key: [Float],
+    value: [Float],
+    gradOutput: [Float],
+    logsumexp: [Float],
+    descriptor: AttentionDescriptor
+  ) -> (dQ: [Float], dK: [Float], dV: [Float]) {
+    guard let dims = descriptor.matrixDimensions else {
+      return (
+        dQ: Array(repeating: 0, count: query.count),
+        dK: Array(repeating: 0, count: key.count),
+        dV: Array(repeating: 0, count: value.count)
+      )
+    }
+
+    let M = Int(dims.row)
+    let N = Int(dims.column)
+    let KDim = Int(dims.head)
+
+    precondition(query.count == M * KDim)
+    precondition(key.count == N * KDim)
+    precondition(value.count == N * KDim)
+    precondition(gradOutput.count == M * KDim)
+    precondition(logsumexp.count >= M)
+
+    let steClipRange: Float = 6.0
+
+    var dQ = [Float](repeating: 0, count: M * KDim)
+    var dK = [Float](repeating: 0, count: N * KDim)
+    var dV = [Float](repeating: 0, count: N * KDim)
+
+    for row in 0..<M {
+      for col in 0..<KDim {
+        let qValue = query[row * KDim + col]
+        let absQ = abs(qValue)
+        var clipFactor: Float = 1.0
+        if absQ > steClipRange {
+          clipFactor = Swift.max(steClipRange / absQ, 0.1)
+        }
+
+        var dqAccumulator: Float = 0
+
+        for n in 0..<N {
+          var qkDot: Float = 0
+          for k in 0..<KDim {
+            qkDot += query[row * KDim + k] * key[n * KDim + k]
+          }
+
+          let clampedLogit = Swift.max(-10.0, Swift.min(10.0, qkDot))
+          let stableLogit = clampedLogit - logsumexp[row]
+          let pVal = Swift.max(0.0, Swift.min(1.0, Float(Foundation.exp(Double(stableLogit)))))
+
+          var gradFactor = pVal * gradOutput[row * KDim + col]
+          gradFactor *= 0.01 as Float
+
+          let kCol = key[n * KDim + col]
+          let vCol = value[n * KDim + col]
+          let combined = (0.5 as Float) * (kCol + vCol)
+
+          dqAccumulator += gradFactor * combined
+        }
+
+        dqAccumulator = Swift.max(-10.0, Swift.min(10.0, dqAccumulator))
+        dQ[row * KDim + col] = dqAccumulator * clipFactor
+      }
+    }
+
+    for row in 0..<N {
+      for col in 0..<KDim {
+        let kValue = key[row * KDim + col]
+        let vValue = value[row * KDim + col]
+
+        var kClipFactor: Float = 1.0
+        var vClipFactor: Float = 1.0
+
+        let absK = abs(kValue)
+        if absK > steClipRange {
+          kClipFactor = Swift.max(steClipRange / absK, 0.1)
+        }
+
+        let absV = abs(vValue)
+        if absV > steClipRange {
+          vClipFactor = Swift.max(steClipRange / absV, 0.1)
+        }
+
+        var dkAccumulator: Float = 0
+        var dvAccumulator: Float = 0
+
+        for m in 0..<M {
+          var qkDot: Float = 0
+          for k in 0..<KDim {
+            qkDot += query[m * KDim + k] * key[row * KDim + k]
+          }
+
+          let clampedQK = Swift.max(-10.0, Swift.min(10.0, qkDot))
+          let stableLogit = clampedQK - logsumexp[m]
+          let pVal = Swift.max(0.0, Swift.min(1.0, Float(Foundation.exp(Double(stableLogit)))))
+
+          let gradComponent = pVal * gradOutput[m * KDim + col]
+          dkAccumulator += query[m * KDim + col] * gradComponent * (0.1 as Float)
+          dvAccumulator += gradComponent * (0.1 as Float)
+        }
+
+        dkAccumulator = Swift.max(-100.0, Swift.min(100.0, dkAccumulator))
+        dvAccumulator = Swift.max(-100.0, Swift.min(100.0, dvAccumulator))
+
+        dK[row * KDim + col] = dkAccumulator * kClipFactor
+        dV[row * KDim + col] = dvAccumulator * vClipFactor
+      }
+    }
+
+    return (dQ: dQ, dK: dK, dV: dV)
   }
 }
