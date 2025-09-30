@@ -105,10 +105,10 @@ jobs:
       - name: Generate test coverage (release only)
         if: matrix.configuration == 'release'
         run: |
-          swift test --enable-code-coverage
+          swift test -c release --enable-code-coverage
           xcrun llvm-cov export -format="lcov" \
-            .build/debug/FlashAttentionPackageTests.xctest/Contents/MacOS/FlashAttentionPackageTests \
-            -instr-profile .build/debug/codecov/default.profdata > coverage.lcov
+            .build/release/FlashAttentionPackageTests.xctest/Contents/MacOS/FlashAttentionPackageTests \
+            -instr-profile .build/release/codecov/default.profdata > coverage.lcov
 
       - name: Upload coverage to Codecov
         if: matrix.configuration == 'release'
