@@ -35,10 +35,44 @@ public struct AttentionDescriptor {
   /// If nil, defaults to 1/√head_dim for backward compatibility.
   public var softmaxScale: Float?
 
+  /// Optional sparse mask metadata that reuses the existing mask buffer binding.
+  public var sparseMask: SparseMaskDescriptor?
+
   public init() {}
 }
 
 public extension AttentionDescriptor {
+  struct SparseMaskDescriptor {
+    public enum MaskType {
+      case dense
+      case sparseRanges
+      case blockSparse(blockSize: Int)
+    }
+
+    /// Reuse the existing mask buffer binding so dense and sparse masks share the same plumbing.
+    public var maskBuffer: MTLBuffer?
+
+    public var maskType: MaskType
+
+    /// Indicates whether the descriptor represents multi-query attention broadcasting.
+    public var isMQA: Bool
+
+    /// Number of unique K/V heads available for broadcast.
+    public var numKVHeads: UInt32
+
+    public init(
+      maskBuffer: MTLBuffer? = nil,
+      maskType: MaskType = .dense,
+      isMQA: Bool = false,
+      numKVHeads: UInt32 = 1
+    ) {
+      self.maskBuffer = maskBuffer
+      self.maskType = maskType
+      self.isMQA = isMQA
+      self.numKVHeads = numKVHeads
+    }
+  }
+
   /// Initialize the kernel descriptor using another descriptor, which just
   /// specifies the problem size. Then, forget the information about problem
   /// size.
@@ -77,6 +111,10 @@ public extension AttentionDescriptor {
         [.Q, .dO, .dQ]
       case .backwardKeyValue:
         [.K, .V, .dV, .dK]
+      case .mlaCompressed:
+        // MLA uses different operands (Q, KV_latent, W_decompress_k, W_decompress_v, O)
+        // but we'll return standard operands for compatibility
+        [.Q, .O]
       }
 
       // Check for unexpected operands.
@@ -142,6 +180,7 @@ public extension AttentionDescriptor {
     output.transposeState = createTransposeState()
     output.type = type
     output.softmaxScale = softmaxScale
+    output.sparseMask = sparseMask
 
     return output
   }
@@ -185,5 +224,28 @@ public extension AttentionDescriptor {
     constants.setConstantValue(&hasSlidingWindow, type: .bool, index: 2)
     constants.setConstantValue(&windowSize, type: .uint, index: 3)
     constants.setConstantValue(&isCausal, type: .bool, index: 4)
+
+    var hasSparseRanges = false
+    var hasBlockSparse = false
+    var isMQA = false
+    var numKVHeads: UInt32 = 1
+
+    if let sparseMask {
+      isMQA = sparseMask.isMQA
+      numKVHeads = max(1, sparseMask.numKVHeads)
+      switch sparseMask.maskType {
+      case .dense:
+        break
+      case .sparseRanges:
+        hasSparseRanges = true
+      case .blockSparse:
+        hasBlockSparse = true
+      }
+    }
+
+    constants.setConstantValue(&hasSparseRanges, type: .bool, index: 9)
+    constants.setConstantValue(&hasBlockSparse, type: .bool, index: 10)
+    constants.setConstantValue(&isMQA, type: .bool, index: 11)
+    constants.setConstantValue(&numKVHeads, type: .uint, index: 12)
   }
 }

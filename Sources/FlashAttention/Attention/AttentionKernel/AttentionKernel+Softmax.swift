@@ -286,7 +286,7 @@ extension AttentionKernel {
     return """
 
     // Apply sparsity patterns
-    if (IS_CAUSAL || HAS_SLIDING_WINDOW) {
+    if (IS_CAUSAL || HAS_SLIDING_WINDOW || HAS_SPARSE_RANGES || HAS_BLOCK_SPARSE) {
       const \(registerName(.S)) mask_value =
       (0.875 / \(logBase2E)) * -numeric_limits<\(registerName(.S))>::max();
 
@@ -303,7 +303,8 @@ extension AttentionKernel {
 
   func applyExternalMask() -> String {
     """
-    if (mask_buffer != nullptr) {
+    if (mask_buffer_bytes != nullptr && !HAS_SPARSE_RANGES && !HAS_BLOCK_SPARSE) {
+      auto mask_buffer = reinterpret_cast<device const float*>(mask_buffer_bytes);
       uint row_idx = \(parallelizationGroupOffset) + morton_offset.y;
       uint col_base = \(traversalOffset) + c + morton_offset.x;
 
@@ -359,6 +360,26 @@ extension AttentionKernel {
               uint row_idx = \(parallelizationGroupOffset) + morton_offset.y;
               uint col_base = \(traversalOffset) + c + morton_offset.x;
 
+              ulong sparse_head_offset = 0;
+              if (HAS_SPARSE_RANGES) {
+                uint effective_num_heads = (multi_head.enabled != 0) ? multi_head.num_heads : 1u;
+                uint effective_num_kv_heads = effective_num_heads;
+                if (multi_head.enabled != 0 && multi_head.num_kv_heads != 0) {
+                  effective_num_kv_heads = multi_head.num_kv_heads;
+                }
+                uint kv_head_id = head_id;
+                if (multi_head.enabled != 0 && multi_head.num_kv_heads != 0) {
+                  kv_head_id = head_id % effective_num_kv_heads;
+                }
+                sparse_head_offset = (((ulong)batch_id * (ulong)effective_num_kv_heads) + (ulong)kv_head_id) * (ulong)R;
+              }
+
+              uint2 sparse_range = uint2(0);
+              if (HAS_SPARSE_RANGES && mask_buffer_bytes != nullptr) {
+                auto sparse_ranges = reinterpret_cast<device const uint2*>(mask_buffer_bytes);
+                sparse_range = *(sparse_ranges + sparse_head_offset + (ulong)row_idx);
+              }
+
               // Optimized causal masking using bitmask approach
               if (IS_CAUSAL) {
                 // Pre-compute causal mask for 2-element vector (morton_offset.x spans 2 elements)
@@ -380,6 +401,11 @@ extension AttentionKernel {
                     should_mask = true;
                   }
 
+                  if (HAS_SPARSE_RANGES && mask_buffer_bytes != nullptr) {
+                    bool outside_sparse = (col_idx < sparse_range.x) || (col_idx >= sparse_range.y);
+                    should_mask = should_mask || outside_sparse;
+                  }
+
                   if (should_mask) {
                     (*S_elements)[index] = mask_value;
                   }
@@ -394,6 +420,11 @@ extension AttentionKernel {
                   // Sliding window masking: mask beyond window
                   if (HAS_SLIDING_WINDOW && row_idx > col_idx + WINDOW_SIZE) {
                     should_mask = true;
+                  }
+
+                  if (HAS_SPARSE_RANGES && mask_buffer_bytes != nullptr) {
+                    bool outside_sparse = (col_idx < sparse_range.x) || (col_idx >= sparse_range.y);
+                    should_mask = should_mask || outside_sparse;
                   }
 
                   if (should_mask) {
@@ -425,6 +456,24 @@ extension AttentionKernel {
                   should_mask = true;
                 }
 
+                if (HAS_SPARSE_RANGES && mask_buffer_bytes != nullptr) {
+                  uint effective_num_heads = (multi_head.enabled != 0) ? multi_head.num_heads : 1u;
+                  uint effective_num_kv_heads = effective_num_heads;
+                  if (multi_head.enabled != 0 && multi_head.num_kv_heads != 0) {
+                    effective_num_kv_heads = multi_head.num_kv_heads;
+                  }
+                  uint kv_head_id = head_id;
+                  if (multi_head.enabled != 0 && multi_head.num_kv_heads != 0) {
+                    kv_head_id = head_id % effective_num_kv_heads;
+                  }
+                  ulong sparse_head_offset = (((ulong)batch_id * (ulong)effective_num_kv_heads) + (ulong)kv_head_id) * (ulong)R;
+                  auto sparse_ranges = reinterpret_cast<device const uint2*>(mask_buffer_bytes);
+                  uint2 sparse_range = *(sparse_ranges + sparse_head_offset + (ulong)row_idx);
+                  if (col_idx < sparse_range.x || col_idx >= sparse_range.y) {
+                    should_mask = true;
+                  }
+                }
+
                 if (should_mask) {
                   (*S_elements)[index] = mask_value;
                 }
@@ -443,7 +492,7 @@ extension AttentionKernel {
     return """
 
         // Apply sparsity patterns for transposed matrix
-        if (IS_CAUSAL || HAS_SLIDING_WINDOW) {
+        if (IS_CAUSAL || HAS_SLIDING_WINDOW || HAS_SPARSE_RANGES || HAS_BLOCK_SPARSE) {
           const \(registerName(.S)) mask_value =
           (0.875 / \(logBase2E)) * -numeric_limits<\(registerName(.S))>::max();
 
@@ -468,6 +517,7 @@ extension AttentionKernel {
               uint col_idx = \(parallelizationGroupOffset) + morton_offset.y;
               uint row_base = \(traversalOffset) + c + morton_offset.x;
 
+
               // Optimized causal masking using bitmask approach (transposed)
               if (IS_CAUSAL) {
                 // Pre-compute causal mask for 2-element vector
@@ -489,6 +539,24 @@ extension AttentionKernel {
                     should_mask = true;
                   }
 
+                  if (HAS_SPARSE_RANGES && mask_buffer_bytes != nullptr) {
+                    uint effective_num_heads = (multi_head.enabled != 0) ? multi_head.num_heads : 1u;
+                    uint effective_num_kv_heads = effective_num_heads;
+                    if (multi_head.enabled != 0 && multi_head.num_kv_heads != 0) {
+                      effective_num_kv_heads = multi_head.num_kv_heads;
+                    }
+                    uint kv_head_id = head_id;
+                    if (multi_head.enabled != 0 && multi_head.num_kv_heads != 0) {
+                      kv_head_id = head_id % effective_num_kv_heads;
+                    }
+                    ulong sparse_head_offset = (((ulong)batch_id * (ulong)effective_num_kv_heads) + (ulong)kv_head_id) * (ulong)R;
+                    auto sparse_ranges = reinterpret_cast<device const uint2*>(mask_buffer_bytes);
+                    uint2 sparse_range = *(sparse_ranges + sparse_head_offset + (ulong)row_idx);
+                    if (col_idx < sparse_range.x || col_idx >= sparse_range.y) {
+                      should_mask = true;
+                    }
+                  }
+
                   if (should_mask) {
                     (*S_elements)[index] = mask_value;
                   }
@@ -503,6 +571,24 @@ extension AttentionKernel {
                   // Sliding window masking: mask beyond window
                   if (HAS_SLIDING_WINDOW && row_idx > col_idx + WINDOW_SIZE) {
                     should_mask = true;
+                  }
+
+                  if (HAS_SPARSE_RANGES && mask_buffer_bytes != nullptr) {
+                    uint effective_num_heads = (multi_head.enabled != 0) ? multi_head.num_heads : 1u;
+                    uint effective_num_kv_heads = effective_num_heads;
+                    if (multi_head.enabled != 0 && multi_head.num_kv_heads != 0) {
+                      effective_num_kv_heads = multi_head.num_kv_heads;
+                    }
+                    uint kv_head_id = head_id;
+                    if (multi_head.enabled != 0 && multi_head.num_kv_heads != 0) {
+                      kv_head_id = head_id % effective_num_kv_heads;
+                    }
+                    ulong sparse_head_offset = (((ulong)batch_id * (ulong)effective_num_kv_heads) + (ulong)kv_head_id) * (ulong)R;
+                    auto sparse_ranges = reinterpret_cast<device const uint2*>(mask_buffer_bytes);
+                    uint2 sparse_range = *(sparse_ranges + sparse_head_offset + (ulong)row_idx);
+                    if (col_idx < sparse_range.x || col_idx >= sparse_range.y) {
+                      should_mask = true;
+                    }
                   }
 
                   if (should_mask) {
@@ -533,6 +619,24 @@ extension AttentionKernel {
                 // Sliding window masking: mask beyond window
                 if (HAS_SLIDING_WINDOW && row_idx > col_idx + WINDOW_SIZE) {
                   should_mask = true;
+                }
+
+                if (HAS_SPARSE_RANGES && mask_buffer_bytes != nullptr) {
+                  uint effective_num_heads = (multi_head.enabled != 0) ? multi_head.num_heads : 1u;
+                  uint effective_num_kv_heads = effective_num_heads;
+                  if (multi_head.enabled != 0 && multi_head.num_kv_heads != 0) {
+                    effective_num_kv_heads = multi_head.num_kv_heads;
+                  }
+                  uint kv_head_id = head_id;
+                  if (multi_head.enabled != 0 && multi_head.num_kv_heads != 0) {
+                    kv_head_id = head_id % effective_num_kv_heads;
+                  }
+                  ulong sparse_head_offset = (((ulong)batch_id * (ulong)effective_num_kv_heads) + (ulong)kv_head_id) * (ulong)R;
+                  auto sparse_ranges = reinterpret_cast<device const uint2*>(mask_buffer_bytes);
+                  uint2 sparse_range = *(sparse_ranges + sparse_head_offset + (ulong)row_idx);
+                  if (col_idx < sparse_range.x || col_idx >= sparse_range.y) {
+                    should_mask = true;
+                  }
                 }
 
                 if (should_mask) {
@@ -753,6 +857,9 @@ extension AttentionKernel {
         }
 
         """
+      case .mlaCompressed:
+        // MLA uses a completely different kernel and does not use template-based softmax
+        ""
       }
     }
 
@@ -788,6 +895,9 @@ extension AttentionKernel {
       }
 
       """
+    case .mlaCompressed:
+      // MLA uses a completely different kernel and does not use template-based softmax
+      return ""
     }
   }
 }

@@ -386,162 +386,56 @@ extension AttentionKernel {
 
     // MARK: - Inner Loop
 
-    func createRowSumComputation() -> String {
-      """
+    func createRowSumComputation() -> String { """
+    """ }
 
-      // Efficient computation of sum_qa per tile row for blockwise compensation
-      if (HAS_BLOCKWISE_A || HAS_BLOCKWISE_B) {
-        // Compute sum of A elements for current tile row
-        if (c == 0) { // Initialize at start of K dimension
-          if (lane_id < 8) {
-            row_sums[lane_id] = 0.0f;
-          }
-          threadgroup_barrier(mem_flags::mem_threadgroup);
-        }
-
-        // Accumulate A element sums during loading
-        if (HAS_BLOCKWISE_A) {
-          // Sum quantized A values for this 8x8 tile
-          thread auto& A_tile = \(A)_sram[c / 8];
-          thread auto* A_elements = A_tile.thread_elements();
-          float local_sum = 0.0f;
-          for (ushort elem = 0; elem < 64; elem++) {
-            // Handle vector type by summing components
-            auto element = A_elements[elem];
-            local_sum += element[0];
-            if (sizeof(element) > sizeof(float)) {
-              local_sum += element[1];
-            }
-          }
-
-          // Reduce across SIMD group for row-wise sums
-          float reduced_sum = simd_sum(local_sum);
-          if (lane_id % 8 == 0) {
-            row_sums[lane_id / 8] += reduced_sum;
-          }
-        }
-
-        threadgroup_barrier(mem_flags::mem_threadgroup);
-      }
-
-      """
-    }
-
-    func createBlockwiseCompensation(descriptor: LoopIterationDescriptor) -> String {
-      """
-
-      // Blockwise quantization compensation logic
-      if (HAS_BLOCKWISE_A || HAS_BLOCKWISE_B) {
-        // Determine current K block boundaries
-        uint kb_start = (c / BLOCK_SIZE_K) * BLOCK_SIZE_K;
-        uint kb_end = min(kb_start + BLOCK_SIZE_K, \(traversalDimension));
-        uint block_idx = kb_start / BLOCK_SIZE_K;
-        uint cnt_b = kb_end - kb_start;
-
-        // Apply compensation at the start of each block (handles tail blocks automatically)
-        if (c == kb_start && cnt_b > 0) {
-          if (HAS_BLOCKWISE_A && HAS_BLOCKWISE_B) {
-            // Both operands blockwise quantized - full compensation
-            float sa = \(A.description.lowercased())_block_scales[block_idx];
-            float sb = \(B.description.lowercased())_block_scales[block_idx];
-            int32_t za = \(A.description.lowercased())_block_zero_points[block_idx];
-            int32_t zb = \(B.description.lowercased())_block_zero_points[block_idx];
-            float kscale = sa * sb;
-
-            // Apply main quantization scaling to the accumulator
-            thread auto& acc_tile = \(C)_sram[(\(descriptor.registerOffset) + d) / 8];
-            thread auto* acc_elements = acc_tile.thread_elements();
-            for (ushort elem = 0; elem < 64; elem++) {
-              acc_elements[elem] *= kscale;
-            }
-
-            // Center-center compensation (constant per block)
-            float center_center = kscale * float(cnt_b * za * zb);
-
-            // Row correction: use computed sum of A quantized values per row
-            float sum_qa_per_row = row_sums[lane_id / 8]; // Get sum for this row from threadgroup memory
-
-            // Column correction: use precomputed sums if available
-            float sum_qb = 0.0f;
-            if (\(B.description.lowercased())_precomputed_sums != nullptr) {
-              sum_qb = \(B.description.lowercased())_precomputed_sums[block_idx];
-            } else {
-              // Compute sum of B quantized values on-the-fly
-              // This is expensive for activations, prefer precomputed for weights
-              sum_qb = float(cnt_b * 64); // Simplified estimate
-            }
-
-            float row_corr = -kscale * float(zb) * sum_qa_per_row;
-            float col_corr = -kscale * float(za) * sum_qb;
-
-            // Apply compensations to accumulator elements
-            // This adds the correction terms distributed across the 8x8 SIMD tile
-            thread auto& acc_comp = \(C)_sram[(\(descriptor.registerOffset) + d) / 8];
-            thread auto* acc_comp_elements = acc_comp.thread_elements();
-            for (ushort elem = 0; elem < 64; elem++) {
-              acc_comp_elements[elem] += (center_center + row_corr + col_corr) / 64.0f;
-            }
-
-          } else if (HAS_BLOCKWISE_B) {
-            // Only B (weights) blockwise quantized - simpler weights-only case
-            float sb = \(B.description.lowercased())_block_scales[block_idx];
-            int32_t zb = \(B.description.lowercased())_block_zero_points[block_idx];
-
-            // Apply scaling to existing accumulator from int8 dot product
-            thread auto& acc_tile_b = \(C)_sram[(\(descriptor.registerOffset) + d) / 8];
-            thread auto* acc_elements_b = acc_tile_b.thread_elements();
-            for (ushort elem = 0; elem < 64; elem++) {
-              acc_elements_b[elem] *= sb;
-            }
-
-            // Row correction: -zb * sum(A_row) * sb
-            // Note: sum(A_row) should be computed per tile row efficiently
-            float sum_qa_estimate = float(cnt_b * 32); // Simplified for prototype
-            float row_correction = -sb * float(zb) * sum_qa_estimate;
-
-            // Apply row correction distributed across accumulator
-            thread auto& acc_b_only = \(C)_sram[(\(descriptor.registerOffset) + d) / 8];
-            thread auto* acc_b_only_elements = acc_b_only.thread_elements();
-            for (ushort elem = 0; elem < 64; elem++) {
-              acc_b_only_elements[elem] += row_correction / 64.0f;
-            }
-          }
-        }
-      }
-
-      """
-    }
+    func createBlockwiseCompensation(descriptor _: LoopIterationDescriptor) -> String { """
+    """ }
 
     func innerLoopHead(
       descriptor: LoopIterationDescriptor
     )
       -> String
     {
-      """
+      let operandName = "\(B.description.lowercased())"
+      let blockwiseSetup = if isQuantized(B) {
+        """
+        float \(operandName)_tile_scale = \(operandName)_scale;
+        int32_t \(operandName)_tile_zero_point = \(operandName)_zero_point;
+        if (\(blockwiseConstant(B)) && BLOCK_SIZE_K > 0 && \(operandName)_block_scales != nullptr) {
+          uint block_idx = uint(c) / BLOCK_SIZE_K;
+          \(operandName)_tile_scale = \(operandName)_block_scales[block_idx];
+          \(operandName)_tile_zero_point = \(operandName)_block_zero_points[block_idx];
+        }
+        """
+      } else {
+        ""
+      }
 
-      // Threadgroup memory for storing per-row sums (declared here for broader scope)
-      threadgroup float row_sums[8];
+      let loadCallString = loadCall(
+        B,
+        src: "\(B)_src",
+        leadingDim: "\(leadingDimensionRHS(descriptor))",
+        origin: "\(B)_origin",
+        transpose: "\(transposed(B))",
+        scaleIdentifier: isQuantized(B) ? "\(operandName)_tile_scale" : nil,
+        zeroPointIdentifier: isQuantized(B) ? "\(operandName)_tile_zero_point" : nil
+      )
 
-      \(createRowSumComputation())
+      return """
 
       #pragma clang loop unroll(full)
       for (ushort d = 0; d < \(descriptor.registerSize); d += 8) {
         // Load the RHS from memory.
         ushort2 \(B)_origin(d, c);
         simdgroup_matrix_storage<\(registerName(B))> \(B);
-        \(B).\(loadCall(
-          B,
-          src: "\(B)_src",
-          leadingDim: "\(leadingDimensionRHS(descriptor))",
-          origin: "\(B)_origin",
-          transpose: "\(transposed(B))"
-        ));
+        \(blockwiseSetup)
+        \(B).\(loadCallString);
 
         // Issue one SIMD matmul instruction.
         \(C)_sram[(\(descriptor.registerOffset) + d) / 8].multiply(
           \(A)_sram[c / 8], \(B), /*accumulate=*/true);
 
-        \(createBlockwiseCompensation(descriptor: descriptor))
       }
 
       """

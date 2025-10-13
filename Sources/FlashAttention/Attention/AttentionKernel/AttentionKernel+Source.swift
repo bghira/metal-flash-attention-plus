@@ -19,6 +19,8 @@ public extension AttentionKernel {
         loopBackwardQuery()
       case .backwardKeyValue:
         loopBackwardKeyValue()
+      case .mlaCompressed:
+        "" // MLA uses a separate kernel, not this template
       }
     }
 
@@ -130,6 +132,9 @@ extension AttentionKernel {
       L = L + (batch_id * num_heads + head_id) * sequence_length;
       D = D + (batch_id * num_heads + head_id) * sequence_length;
       """
+    case .mlaCompressed:
+      // MLA uses a separate kernel implementation
+      ""
     case .backwardKeyValue:
       """
       Q = Q + q_batch_head_offset;
@@ -157,10 +162,17 @@ extension AttentionKernel {
     constant uint WINDOW_SIZE [[function_constant(3)]];
     constant bool IS_CAUSAL [[function_constant(4)]];
 
-    // Blockwise quantization constants
-    constant bool HAS_BLOCKWISE_A [[function_constant(5)]];
-    constant bool HAS_BLOCKWISE_B [[function_constant(6)]];
-    constant uint BLOCK_SIZE_K [[function_constant(7)]];
+    // Blockwise quantization constants per operand
+    constant bool HAS_BLOCKWISE_Q [[function_constant(5)]];
+    constant bool HAS_BLOCKWISE_K [[function_constant(6)]];
+    constant bool HAS_BLOCKWISE_V [[function_constant(7)]];
+    constant uint BLOCK_SIZE_K [[function_constant(8)]];
+
+    // Sparse masking and broadcast metadata
+    constant bool HAS_SPARSE_RANGES [[function_constant(9)]];
+    constant bool HAS_BLOCK_SPARSE [[function_constant(10)]];
+    constant bool IS_MQA_MODE [[function_constant(11)]];
+    constant uint NUM_KV_HEADS [[function_constant(12)]];
 
     struct MultiHeadParams {
       uint enabled;
@@ -192,6 +204,10 @@ extension AttentionKernel {
       operands += [.Q, .K, .V]
       operands += [.dO, .dV, .dK]
       operands += [.L, .D]
+    case .mlaCompressed:
+      // MLA has different operands: Q, KV_latent, W_decompress_k, W_decompress_v, O
+      // For compatibility, use standard operands
+      operands += [.Q, .O]
     }
     operands.sort {
       $0.bufferBinding! < $1.bufferBinding!
@@ -238,7 +254,6 @@ extension AttentionKernel {
       output +=
         "  device const int32_t* \(operandName)_block_zero_points [[buffer(\(currentBufferIndex))]], \n"
       currentBufferIndex += 1
-
       // Precomputed sums buffer (optional, mainly for weights)
       output +=
         "  device const float* \(operandName)_precomputed_sums [[buffer(\(currentBufferIndex))]], \n"
@@ -272,7 +287,7 @@ extension AttentionKernel {
       "  constant MultiHeadParams &multi_head [[buffer(\(currentBufferIndex))]], \n"
     currentBufferIndex += 1
 
-    output += "  device float *mask_buffer [[buffer(\(currentBufferIndex))]], \n"
+    output += "  device char *mask_buffer_bytes [[buffer(\(currentBufferIndex))]], \n"
     currentBufferIndex += 1
 
     return output

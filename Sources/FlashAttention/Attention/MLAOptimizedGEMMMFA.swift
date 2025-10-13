@@ -2,107 +2,159 @@
 //  MLAOptimizedGEMMMFA.swift
 //  FlashAttention
 //
-//  Multi-Latent Attention (MLA) decompression
-//  Target: 10.9 TFLOPS @ 2048×2048 on M3 Max
-//
-//  TODO: Currently uses MPS for GEMM. Should be migrated to use MFA's superior GEMM kernels
-//  for better performance. See GEMMKernel.register() and GEMMKernel.pipelineCache usage in
-//  Tests/FlashAttentionTests/GEMM/LaplacianTest.swift for proper MFA GEMM integration.
+//  MLA decompression using MFA's optimized GEMM code generation
+//  Target: 8.5 TFLOPS FP32, 10 TFLOPS FP16 (vs MPS 7.5/7.0)
 //
 
 import Metal
-import MetalPerformanceShaders
-import Foundation
 
-/// MLA (Multi-Latent Attention) decompression
-///
-/// Decompresses KV cache from [batch, seq, kv_latent_dim] to full K and V
-/// using learned weight matrices W_k and W_v.
-///
-/// Current: Uses MPS for GEMM (reliable, good performance)
-/// Future: Should use MFA GEMM for superior performance (10.9 TFLOPS on M3 Max)
-public final class MLAOptimizedGEMMMFA {
+/// MLA decompression using MFA's GEMMKernel code generation
+public class MLAOptimizedGEMMMFA {
   private let device: MTLDevice
-  private let commandQueue: MTLCommandQueue
 
-  // Decompression weight matrices
-  private var wk: MTLBuffer?  // [kv_latent_dim, num_heads × head_dim]
-  private var wv: MTLBuffer?  // [kv_latent_dim, num_heads × head_dim]
+  // Decompression weights
+  private var wDecompressK: MTLBuffer?
+  private var wDecompressV: MTLBuffer?
 
-  public init(device: MTLDevice) throws {
-    self.device = device
-    guard let queue = device.makeCommandQueue() else {
-      throw NSError(
-        domain: "MLAOptimizedGEMMMFA",
-        code: -1,
-        userInfo: [NSLocalizedDescriptionKey: "Failed to create command queue"]
-      )
+  // Temporary buffers
+  private var decompressedK: MTLBuffer?
+  private var decompressedV: MTLBuffer?
+  private var currentKVSize: Int = 0
+
+  // Common MLA sizes to pre-register
+  private let commonSizes: [(M: Int, N: Int, K: Int)] = [
+    (M: 512, N: 512, K: 512),
+    (M: 1024, N: 1024, K: 1024),
+    (M: 2048, N: 2048, K: 2048),
+    (M: 512, N: 512, K: 1024), // Asymmetric sizes
+    (M: 1024, N: 512, K: 512),
+  ]
+
+  public init(device: MTLDevice? = nil) throws {
+    self.device = device ?? MTLCreateSystemDefaultDevice()!
+
+    // Pre-register common MLA sizes for immediate availability
+    for size in commonSizes {
+      registerGEMMKernel(M: size.M, N: size.N, K: size.K, precision: .FP16)
     }
-    self.commandQueue = queue
   }
 
-  /// Initialize random decompression weights for testing
-  ///
-  /// - Parameters:
-  ///   - numHeads: Number of attention heads
-  ///   - headDim: Dimension per head
-  ///   - kvLatentDim: Compressed KV dimension
+  /// Register and compile a GEMM kernel for given dimensions
+  private func registerGEMMKernel(
+    M: Int, N: Int, K: Int,
+    precision: GEMMOperandPrecision
+  ) {
+    var desc = GEMMDescriptor()
+    desc.matrixDimensions = (M: UInt32(M), N: UInt32(N), K: UInt32(K))
+    desc.memoryPrecisions = (A: precision, B: precision, C: precision)
+    desc.transposeState = (A: false, B: false)
+    desc.loadPreviousC = false
+
+    // Register (generates and compiles shader)
+    GEMMKernel.register(descriptor: desc)
+  }
+
   public func initializeDecompressionWeights(
     numHeads: Int,
     headDim: Int,
     kvLatentDim: Int
   ) {
     let totalDim = numHeads * headDim
-    let wkSize = kvLatentDim * totalDim * MemoryLayout<UInt16>.size
-    let wvSize = kvLatentDim * totalDim * MemoryLayout<UInt16>.size
+    let bufferSize = kvLatentDim * totalDim * MemoryLayout<Float16>.size
 
-    // Create buffers with random FP16 data
-    wk = device.makeBuffer(length: wkSize, options: .storageModeShared)
-    wv = device.makeBuffer(length: wvSize, options: .storageModeShared)
+    wDecompressK = device.makeBuffer(
+      length: bufferSize, options: .storageModeShared
+    )
+    wDecompressV = device.makeBuffer(
+      length: bufferSize, options: .storageModeShared
+    )
 
-    // Initialize with random values
-    if let wkPtr = wk?.contents().assumingMemoryBound(to: UInt16.self) {
+    // Initialize with random weights (Xavier/Glorot)
+    if
+      let kPtr = wDecompressK?.contents().bindMemory(
+        to: Float16.self, capacity: kvLatentDim * totalDim
+      ),
+      let vPtr = wDecompressV?.contents().bindMemory(
+        to: Float16.self, capacity: kvLatentDim * totalDim
+      )
+    {
+      let scale = sqrtf(2.0 / Float(kvLatentDim))
       for i in 0..<(kvLatentDim * totalDim) {
-        // Simple FP32 to FP16 conversion
-        let value = Float.random(in: -0.1...0.1)
-        wkPtr[i] = UInt16((value.bitPattern >> 16) & 0xFFFF)
-      }
-    }
-
-    if let wvPtr = wv?.contents().assumingMemoryBound(to: UInt16.self) {
-      for i in 0..<(kvLatentDim * totalDim) {
-        let value = Float.random(in: -0.1...0.1)
-        wvPtr[i] = UInt16((value.bitPattern >> 16) & 0xFFFF)
+        kPtr[i] = Float16(Float.random(in: -scale...scale))
+        vPtr[i] = Float16(Float.random(in: -scale...scale))
       }
     }
   }
 
   /// Load pre-trained decompression weights
-  ///
-  /// - Parameters:
-  ///   - wk: Weight matrix for K decompression
-  ///   - wv: Weight matrix for V decompression
   public func loadWeights(wk: MTLBuffer, wv: MTLBuffer) {
-    self.wk = wk
-    self.wv = wv
+    wDecompressK = wk
+    wDecompressV = wv
   }
 
-  /// Perform MLA forward pass: decompress KV latent into full K and V
-  ///
-  /// Performs two GEMMs:
-  /// - K = KV_latent @ W_k
-  /// - V = KV_latent @ W_v
-  ///
-  /// - Parameters:
-  ///   - commandBuffer: Metal command buffer
-  ///   - kvLatent: Input compressed KV [batch×seq, kv_latent_dim]
-  ///   - decompressedK: Output K buffer [batch×seq, num_heads×head_dim]
-  ///   - decompressedV: Output V buffer [batch×seq, num_heads×head_dim]
-  ///   - batchSize: Batch size
-  ///   - numHeads: Number of attention heads
-  ///   - sequenceLength: Sequence length
-  ///   - headDim: Head dimension
-  ///   - kvLatentDim: Compressed latent dimension
+  /// Execute GEMM using MFA's generated kernel
+  /// C[M,N] = A[M,K] @ B[K,N]
+  public func encodeGEMM(
+    commandBuffer: MTLCommandBuffer,
+    A: MTLBuffer,
+    B: MTLBuffer,
+    C: MTLBuffer,
+    M: Int,
+    N: Int,
+    K: Int
+  ) {
+    // Create descriptor
+    var desc = GEMMDescriptor()
+    desc.matrixDimensions = (M: UInt32(M), N: UInt32(N), K: UInt32(K))
+    desc.memoryPrecisions = (A: .FP16, B: .FP16, C: .FP16)
+    desc.transposeState = (A: false, B: false)
+    desc.loadPreviousC = false
+
+    // Ensure kernel is registered (should be cached from init)
+    GEMMKernel.register(descriptor: desc)
+
+    // Retrieve cached kernel and pipeline
+    guard let (kernel, pipeline) = GEMMKernel.pipelineCache[desc] else {
+      fatalError("GEMM kernel not found in cache for \(M)×\(N)×\(K)")
+    }
+
+    // Encode command
+    guard let encoder = commandBuffer.makeComputeCommandEncoder() else {
+      return
+    }
+
+    encoder.setComputePipelineState(pipeline)
+    encoder.setThreadgroupMemoryLength(
+      Int(kernel.threadgroupMemoryAllocation), index: 0
+    )
+
+    // Set buffers (MFA convention: 0=A, 1=B, 2=C)
+    encoder.setBuffer(A, offset: 0, index: 0)
+    encoder.setBuffer(B, offset: 0, index: 1)
+    encoder.setBuffer(C, offset: 0, index: 2)
+
+    // Calculate dispatch dimensions
+    func ceilDivide(_ target: Int, _ granularity: UInt16) -> Int {
+      (target + Int(granularity) - 1) / Int(granularity)
+    }
+
+    let gridSize = MTLSize(
+      width: ceilDivide(N, kernel.blockDimensions.N),
+      height: ceilDivide(M, kernel.blockDimensions.M),
+      depth: 1
+    )
+    let groupSize = MTLSize(
+      width: Int(kernel.threadgroupSize),
+      height: 1,
+      depth: 1
+    )
+
+    encoder.dispatchThreadgroups(gridSize, threadsPerThreadgroup: groupSize)
+    encoder.endEncoding()
+  }
+
+  /// Forward pass: MFA GEMM decompression
+  /// K[batch*seq, heads*dim] = latent_k[batch*seq, latent] @ W_k[latent, heads*dim]
   public func forward(
     commandBuffer: MTLCommandBuffer,
     kvLatent: MTLBuffer,
@@ -114,143 +166,73 @@ public final class MLAOptimizedGEMMMFA {
     headDim: Int,
     kvLatentDim: Int
   ) throws {
-    guard let wk = self.wk, let wv = self.wv else {
+    guard
+      let wDecompressK,
+      let wDecompressV
+    else {
       throw NSError(
-        domain: "MLAOptimizedGEMMMFA",
-        code: -2,
-        userInfo: [NSLocalizedDescriptionKey: "Weights not initialized"]
+        domain: "MLAOptimizedGEMMMFA", code: 1,
+        userInfo: [
+          NSLocalizedDescriptionKey: "Weights not initialized",
+        ]
       )
     }
 
+    let totalDim = numHeads * headDim
+    let kvSize = batchSize * sequenceLength * totalDim * MemoryLayout<Float16>.size
+
+    // Allocate K,V buffers
+    if self.decompressedK == nil || currentKVSize < kvSize {
+      self.decompressedK = device.makeBuffer(
+        length: kvSize, options: .storageModePrivate
+      )
+      self.decompressedV = device.makeBuffer(
+        length: kvSize, options: .storageModePrivate
+      )
+      currentKVSize = kvSize
+    }
+
+    decompressedK = self.decompressedK
+    decompressedV = self.decompressedV
+
+    guard
+      let kBuf = decompressedK,
+      let vBuf = decompressedV
+    else {
+      throw NSError(
+        domain: "MLAOptimizedGEMMMFA", code: 2,
+        userInfo: [
+          NSLocalizedDescriptionKey: "Failed to allocate buffers",
+        ]
+      )
+    }
+
+    // Batched GEMM for all batches at once
+    // latent_k[batchSize*seqLen, kvLatentDim] @ W_k[kvLatentDim, totalDim]
     let M = batchSize * sequenceLength
-    let N = numHeads * headDim
+    let N = totalDim
     let K = kvLatentDim
 
-    // Allocate output buffers if needed
-    let outputSize = M * N * MemoryLayout<UInt16>.size
-    if decompressedK == nil {
-      decompressedK = device.makeBuffer(length: outputSize, options: .storageModeShared)
-    }
-    if decompressedV == nil {
-      decompressedV = device.makeBuffer(length: outputSize, options: .storageModeShared)
-    }
-
-    guard let k = decompressedK, let v = decompressedV else {
-      throw NSError(
-        domain: "MLAOptimizedGEMMMFA",
-        code: -3,
-        userInfo: [NSLocalizedDescriptionKey: "Failed to allocate output buffers"]
-      )
-    }
-
-    // Use MPS for GEMM operations (reliable, good baseline performance)
-    // TODO: Migrate to MFA GEMM for 10.9 TFLOPS performance
-    // K = KV_latent @ W_k
-    try encodeGEMMWithMPS(
+    // Decompress K
+    encodeGEMM(
       commandBuffer: commandBuffer,
       A: kvLatent,
-      B: wk,
-      C: k,
+      B: wDecompressK,
+      C: kBuf,
       M: M,
       N: N,
       K: K
     )
 
-    // V = KV_latent @ W_v
-    try encodeGEMMWithMPS(
+    // Decompress V
+    encodeGEMM(
       commandBuffer: commandBuffer,
       A: kvLatent,
-      B: wv,
-      C: v,
+      B: wDecompressV,
+      C: vBuf,
       M: M,
       N: N,
       K: K
-    )
-  }
-
-  /// Public method for direct GEMM access (matches test expectations)
-  public func encodeGEMM(
-    commandBuffer: MTLCommandBuffer,
-    A: MTLBuffer,
-    B: MTLBuffer,
-    C: MTLBuffer,
-    M: Int,
-    N: Int,
-    K: Int
-  ) {
-    try? encodeGEMMWithMPS(
-      commandBuffer: commandBuffer,
-      A: A,
-      B: B,
-      C: C,
-      M: M,
-      N: N,
-      K: K
-    )
-  }
-
-  /// Encode GEMM operation using MPS (Metal Performance Shaders)
-  ///
-  /// C = A @ B where:
-  /// - A: [M, K]
-  /// - B: [K, N]
-  /// - C: [M, N]
-  private func encodeGEMMWithMPS(
-    commandBuffer: MTLCommandBuffer,
-    A: MTLBuffer,
-    B: MTLBuffer,
-    C: MTLBuffer,
-    M: Int,
-    N: Int,
-    K: Int
-  ) throws {
-    // Use MPSMatrixMultiplication (same backend PyTorch MPS uses)
-    let matrixA = MPSMatrix(
-      buffer: A,
-      descriptor: MPSMatrixDescriptor(
-        rows: M,
-        columns: K,
-        rowBytes: K * MemoryLayout<UInt16>.size,
-        dataType: .float16
-      )
-    )
-
-    let matrixB = MPSMatrix(
-      buffer: B,
-      descriptor: MPSMatrixDescriptor(
-        rows: K,
-        columns: N,
-        rowBytes: N * MemoryLayout<UInt16>.size,
-        dataType: .float16
-      )
-    )
-
-    let matrixC = MPSMatrix(
-      buffer: C,
-      descriptor: MPSMatrixDescriptor(
-        rows: M,
-        columns: N,
-        rowBytes: N * MemoryLayout<UInt16>.size,
-        dataType: .float16
-      )
-    )
-
-    let matmul = MPSMatrixMultiplication(
-      device: device,
-      transposeLeft: false,
-      transposeRight: false,
-      resultRows: M,
-      resultColumns: N,
-      interiorColumns: K,
-      alpha: 1.0,
-      beta: 0.0
-    )
-
-    matmul.encode(
-      commandBuffer: commandBuffer,
-      leftMatrix: matrixA,
-      rightMatrix: matrixB,
-      resultMatrix: matrixC
     )
   }
 }

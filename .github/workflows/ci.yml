@@ -102,21 +102,8 @@ jobs:
       - name: Run Swift Tests
         run: swift test -c ${{ matrix.configuration }}
 
-      - name: Generate test coverage (release only)
-        if: matrix.configuration == 'release'
-        run: |
-          swift test --enable-code-coverage
-          xcrun llvm-cov export -format="lcov" \
-            .build/debug/FlashAttentionPackageTests.xctest/Contents/MacOS/FlashAttentionPackageTests \
-            -instr-profile .build/debug/codecov/default.profdata > coverage.lcov
-
-      - name: Upload coverage to Codecov
-        if: matrix.configuration == 'release'
-        uses: codecov/codecov-action@v4
-        with:
-          file: coverage.lcov
-          flags: swift
-          name: swift-tests
+      # Note: Code coverage generation is currently disabled for Swift packages
+      # due to limitations in SPM coverage tooling. Re-enable when tooling improves.
 
   # Performance benchmarks
   benchmarks:
