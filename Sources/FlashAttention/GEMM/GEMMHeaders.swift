@@ -557,6 +557,8 @@ func createMetalSimdgroupMatrixStorage() -> String {
   #ifndef __METAL_SIMDGROUP_MATRIX_STORAGE
   #define __METAL_SIMDGROUP_MATRIX_STORAGE
 
+  #include "GEMMBFloatTypes.h"
+
   // The layout of threads within a SIMD matrix.
   //
   //  0  0  1  1  8  8  9  9

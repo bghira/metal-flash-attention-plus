@@ -6,6 +6,7 @@
 
 #include <metal_stdlib>
 #include <metal_simdgroup_matrix>
+#include "GEMMBFloatTypes.h"
 using namespace metal;
 
 // GPU-optimized INT8 quantization utilities
