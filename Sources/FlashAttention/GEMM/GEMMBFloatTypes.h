@@ -11,7 +11,8 @@
 #include <metal_stdlib>
 using namespace metal;
 
-// Define bfloat vector types (Metal only has bfloat scalar type)
+#if !defined(__HAVE_BFLOAT__)
+// Define bfloat vector types (Metal only has bfloat scalar type on older toolchains)
 struct packed_bfloat2 {
     bfloat x, y;
 
@@ -19,11 +20,11 @@ struct packed_bfloat2 {
     packed_bfloat2(bfloat x_, bfloat y_) : x(x_), y(y_) {}
 
     // Subscript operator for element access
-    bfloat& operator[](int i) {
+    thread bfloat& operator[](int i) thread {
         return (i == 0) ? x : y;
     }
 
-    const bfloat& operator[](int i) const {
+    thread const bfloat& operator[](int i) const thread {
         return (i == 0) ? x : y;
     }
 };
@@ -40,7 +41,7 @@ struct packed_bfloat4 {
     }
 
     // Subscript operator for element access
-    bfloat& operator[](int i) {
+    thread bfloat& operator[](int i) thread {
         switch(i) {
             case 0: return x;
             case 1: return y;
@@ -49,7 +50,7 @@ struct packed_bfloat4 {
         }
     }
 
-    const bfloat& operator[](int i) const {
+    thread const bfloat& operator[](int i) const thread {
         switch(i) {
             case 0: return x;
             case 1: return y;
@@ -62,5 +63,6 @@ struct packed_bfloat4 {
 // Alias for consistency with other vector types
 typedef packed_bfloat2 bfloat2;
 typedef packed_bfloat4 bfloat4;
+#endif // !defined(__HAVE_BFLOAT__)
 
 #endif // __GEMM_BFLOAT_TYPES_H

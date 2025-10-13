@@ -5,6 +5,30 @@
 //  Created by Philip Turner on 6/21/24.
 //
 
+import Foundation
+
+enum GEMMBFloatHeaderEmbedder {
+  private static let headerSource: String = {
+    let fileURL = URL(fileURLWithPath: #filePath)
+    let directory = fileURL.deletingLastPathComponent()
+    let headerURL = directory.appendingPathComponent("GEMMBFloatTypes.h")
+    return (try? String(contentsOf: headerURL)) ?? ""
+  }()
+
+  static func embed(into source: String) -> String {
+    let includeDirective = "#include \"GEMMBFloatTypes.h\""
+    guard
+      source.contains(includeDirective),
+      !headerSource.isEmpty
+    else {
+      return source
+    }
+    let replacement =
+      "// Embedded GEMMBFloatTypes.h\n\(headerSource)\n// End embedded header"
+    return source.replacingOccurrences(of: includeDirective, with: replacement)
+  }
+}
+
 /// Create the source code for the 'metal\_simdgroup\_event' header.
 ///
 /// I may have found the hardware bug with async copies on M1. If you shoot
