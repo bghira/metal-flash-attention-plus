@@ -40,7 +40,6 @@ public class QuantizedAttention {
     public init() {}
   }
 
-
   /// Quantized attention descriptor that extends AttentionDescriptor
   public struct QuantizedAttentionDescriptor {
     /// Base attention descriptor
@@ -63,7 +62,6 @@ public class QuantizedAttention {
       descriptor.memoryPrecisions[.K] = quantizationConfig.keyPrecision
       descriptor.memoryPrecisions[.V] = quantizationConfig.valuePrecision
 
-
       // Set register precisions to FP32 for quantized inputs
       if quantizationConfig.queryPrecision.requiresQuantizationParameters {
         descriptor.registerPrecisions[.Q] = .FP32
@@ -75,15 +73,14 @@ public class QuantizedAttention {
         descriptor.registerPrecisions[.V] = .FP32
       }
 
-
       return descriptor
     }
   }
 
   private let device: MTLDevice
-  private let commandQueue: MTLCommandQueue?  // Make optional to handle cleanup safely
+  private let commandQueue: MTLCommandQueue? // Make optional to handle cleanup safely
   private var pipelineCache: [String: MTLComputePipelineState] = [:]
-  private var isDisposed: Bool = false  // Track disposal state
+  private var isDisposed: Bool = false // Track disposal state
 
   public init(device: MTLDevice) {
     self.device = device
@@ -97,13 +94,11 @@ public class QuantizedAttention {
   private func dispose() {
     guard !isDisposed else { return }
 
-
     // Clear pipeline cache safely
     pipelineCache.removeAll()
 
     // Mark as disposed to prevent double-cleanup
     isDisposed = true
-
   }
 
   /// Swift deinitializer with defensive guards
@@ -128,9 +123,10 @@ public class QuantizedAttention {
   )
     -> MTLCommandBuffer?
   {
-
-    guard !isDisposed, let queue = commandQueue,
-          let commandBuffer = queue.makeCommandBuffer() else {
+    guard
+      !isDisposed, let queue = commandQueue,
+      let commandBuffer = queue.makeCommandBuffer()
+    else {
       print("Error: Failed to create command buffer (disposed: \(isDisposed))")
       return nil
     }
@@ -161,68 +157,41 @@ public class QuantizedAttention {
     encoder.setBuffer(value.data, offset: 0, index: 2)
     encoder.setBuffer(output, offset: 0, index: 3)
 
-
     // Set quantization parameters
     var bufferIndex = 4
 
     func encodeQuantizationParameters(_ parameters: QuantizationParameters) {
       var scale = parameters.scale
       var zeroPoint = parameters.zeroPoint
-      var strategy = UInt32(parameters.strategy.rawValue)
-      var strategyVersion = UInt32(parameters.strategyVersion)
 
       encoder.setBytes(&scale, length: MemoryLayout<Float>.size, index: bufferIndex)
       bufferIndex += 1
 
       encoder.setBytes(&zeroPoint, length: MemoryLayout<Int32>.size, index: bufferIndex)
       bufferIndex += 1
-
-      encoder.setBytes(&strategy, length: MemoryLayout<UInt32>.size, index: bufferIndex)
-      bufferIndex += 1
-
-      encoder.setBytes(
-        &strategyVersion,
-        length: MemoryLayout<UInt32>.size,
-        index: bufferIndex
-      )
-      bufferIndex += 1
     }
 
     if query.parameters.precision.requiresQuantizationParameters {
       encodeQuantizationParameters(query.parameters)
-    } else {
-    }
+    } else {}
 
     if key.parameters.precision.requiresQuantizationParameters {
       encodeQuantizationParameters(key.parameters)
-    } else {
-    }
+    } else {}
 
     if value.parameters.precision.requiresQuantizationParameters {
       encodeQuantizationParameters(value.parameters)
-    } else {
-    }
-
-    // Set matrix dimensions
-    let dims = descriptor.baseDescriptor.matrixDimensions!
-    var M = UInt32(dims.row)
-    var N = UInt32(dims.column)
-    var K = UInt32(dims.head)
-
-    encoder.setBytes(&M, length: MemoryLayout<UInt32>.size, index: bufferIndex)
-    encoder.setBytes(&N, length: MemoryLayout<UInt32>.size, index: bufferIndex + 1)
-    encoder.setBytes(&K, length: MemoryLayout<UInt32>.size, index: bufferIndex + 2)
+    } else {}
 
     // Use proper threadgroup configuration from AttentionKernel
     let kernelThreadgroupSize = Int(kernel.threadgroupSize)
     let blockParallelization = Int(kernel.blockDimensions.parallelization)
 
-
     // Flash attention kernel expects specific dispatch configuration
     let threadgroupSize = MTLSize(width: kernelThreadgroupSize, height: 1, depth: 1)
-    let numThreadgroups = (blockParallelization + Int(kernel.blockDimensions.parallelization) - 1) / Int(kernel.blockDimensions.parallelization)
+    let numThreadgroups = (blockParallelization + Int(kernel.blockDimensions.parallelization) - 1) /
+      Int(kernel.blockDimensions.parallelization)
     let gridSize = MTLSize(width: numThreadgroups, height: 1, depth: 1)
-
 
     encoder.dispatchThreadgroups(gridSize, threadsPerThreadgroup: threadgroupSize)
     encoder.endEncoding()
@@ -257,8 +226,9 @@ public class QuantizedAttention {
     targetQuantization: GEMMOperandPrecision,
     quantizationMode: QuantizationMode = .tensorWise,
     descriptor: QuantizedAttentionDescriptor
-  ) -> MTLCommandBuffer? {
-
+  )
+    -> MTLCommandBuffer?
+  {
     guard !isDisposed, let _ = commandQueue else {
       print("Error: Failed to access command queue (disposed: \(isDisposed))")
       return nil
@@ -323,9 +293,10 @@ public class QuantizedAttention {
     targetQuantization: GEMMOperandPrecision,
     quantizationMode: QuantizationMode = .tensorWise,
     descriptor: QuantizedAttentionDescriptor
-  ) -> MTLCommandBuffer? {
-
-    return forward(
+  )
+    -> MTLCommandBuffer?
+  {
+    forward(
       queryBuffer: queryBuffer,
       keyBuffer: keyBuffer,
       valueBuffer: valueBuffer,
@@ -350,8 +321,9 @@ public class QuantizedAttention {
     targetPrecision: GEMMOperandPrecision,
     quantizationMode: QuantizationMode,
     targetStrategy: QuantizationStrategy
-  ) -> QuantizedTensor {
-
+  )
+    -> QuantizedTensor
+  {
     let elementCount = shape.reduce(1, *)
 
     // If target precision doesn't require quantization, wrap existing buffer
@@ -373,16 +345,20 @@ public class QuantizedAttention {
     }
 
     // Use fused quantization for symmetric blockwise quantization
-    if targetStrategy == .symmetric,
-       case .blockwise(let blockSizeK, _) = quantizationMode,
-       targetPrecision == .INT8 {
+    if
+      targetStrategy == .symmetric,
+      case let .blockwise(blockSizeK, _) = quantizationMode,
+      targetPrecision == .INT8
+    {
       do {
         // Initialize the runtime quantization utility
         let runtimeQuantizer = try GEMMRuntimeQuantization(device: device)
 
         // Create command buffer for fused quantization
-        guard let commandQueue = device.makeCommandQueue(),
-              let commandBuffer = commandQueue.makeCommandBuffer() else {
+        guard
+          let commandQueue = device.makeCommandQueue(),
+          let commandBuffer = commandQueue.makeCommandBuffer()
+        else {
           fatalError("Could not create Metal command queue or command buffer")
         }
 
@@ -425,8 +401,10 @@ public class QuantizedAttention {
     }
 
     // Create quantized buffer
-    let bufferSize = targetPrecision == .INT4 ? (elementCount + 1) / 2 : elementCount * targetPrecision.size
-    guard let quantizedBuffer = device.makeBuffer(length: bufferSize, options: .storageModeShared) else {
+    let bufferSize = targetPrecision == .INT4 ? (elementCount + 1) / 2 : elementCount *
+      targetPrecision.size
+    guard let quantizedBuffer = device.makeBuffer(length: bufferSize, options: .storageModeShared)
+    else {
       fatalError("Could not create quantized buffer")
     }
 
@@ -454,8 +432,9 @@ public class QuantizedAttention {
     buffer: MTLBuffer,
     elementCount: Int,
     inputPrecision: GEMMOperandPrecision
-  ) -> [Float] {
-
+  )
+    -> [Float]
+  {
     var floatData = [Float](repeating: 0, count: elementCount)
     let bufferContents = buffer.contents()
 
@@ -557,17 +536,38 @@ extension QuantizedAttention.Configuration: Codable {
   public init(from decoder: Decoder) throws {
     let container = try decoder.container(keyedBy: CodingKeys.self)
 
-    queryPrecision = try container.decodeIfPresent(GEMMOperandPrecision.self, forKey: .queryPrecision) ?? .FP16
-    keyPrecision = try container.decodeIfPresent(GEMMOperandPrecision.self, forKey: .keyPrecision) ?? .INT8
-    valuePrecision = try container.decodeIfPresent(GEMMOperandPrecision.self, forKey: .valuePrecision) ?? .INT8
+    queryPrecision = try container.decodeIfPresent(
+      GEMMOperandPrecision.self,
+      forKey: .queryPrecision
+    ) ?? .FP16
+    keyPrecision = try container
+      .decodeIfPresent(GEMMOperandPrecision.self, forKey: .keyPrecision) ?? .INT8
+    valuePrecision = try container.decodeIfPresent(
+      GEMMOperandPrecision.self,
+      forKey: .valuePrecision
+    ) ?? .INT8
 
-    queryStrategy = try container.decodeIfPresent(QuantizationStrategy.self, forKey: .queryStrategy) ?? .legacy
-    keyStrategy = try container.decodeIfPresent(QuantizationStrategy.self, forKey: .keyStrategy) ?? .legacy
-    valueStrategy = try container.decodeIfPresent(QuantizationStrategy.self, forKey: .valueStrategy) ?? .legacy
-    strategyVersion = try container.decodeIfPresent(UInt8.self, forKey: .strategyVersion) ?? QuantizationStrategy.currentVersion
+    queryStrategy = try container.decodeIfPresent(
+      QuantizationStrategy.self,
+      forKey: .queryStrategy
+    ) ?? .legacy
+    keyStrategy = try container
+      .decodeIfPresent(QuantizationStrategy.self, forKey: .keyStrategy) ?? .legacy
+    valueStrategy = try container.decodeIfPresent(
+      QuantizationStrategy.self,
+      forKey: .valueStrategy
+    ) ?? .legacy
+    strategyVersion = try container
+      .decodeIfPresent(UInt8.self, forKey: .strategyVersion) ?? QuantizationStrategy.currentVersion
 
-    mixedPrecisionIntermediates = try container.decodeIfPresent(Bool.self, forKey: .mixedPrecisionIntermediates) ?? true
-    quantizationParameters = try container.decodeIfPresent([String: QuantizationParameters].self, forKey: .quantizationParameters) ?? [:]
+    mixedPrecisionIntermediates = try container.decodeIfPresent(
+      Bool.self,
+      forKey: .mixedPrecisionIntermediates
+    ) ?? true
+    quantizationParameters = try container.decodeIfPresent(
+      [String: QuantizationParameters].self,
+      forKey: .quantizationParameters
+    ) ?? [:]
   }
 
   public func encode(to encoder: Encoder) throws {
@@ -598,7 +598,7 @@ public extension QuantizedAttention {
   ///   - quantizeTo: Target quantization (INT8 or INT4)
   ///   - mode: Quantization granularity mode
   /// - Returns: Command buffer for execution
-  public func forwardWithRuntimeQuantization(
+  func forwardWithRuntimeQuantization(
     queryBuffer: MTLBuffer,
     keyBuffer: MTLBuffer,
     valueBuffer: MTLBuffer,
@@ -607,8 +607,9 @@ public extension QuantizedAttention {
     inputFormat: GEMMOperandPrecision = .FP16,
     quantizeTo: GEMMOperandPrecision = .INT8,
     mode: QuantizationMode = .tensorWise
-  ) -> MTLCommandBuffer? {
-
+  )
+    -> MTLCommandBuffer?
+  {
     // Create default attention descriptor
     var baseDescriptor = AttentionDescriptor()
     guard shape.count >= 3 else {
@@ -847,8 +848,10 @@ extension QuantizedAttention {
   )
     -> MTLCommandBuffer?
   {
-    guard !isDisposed, let queue = commandQueue,
-          let commandBuffer = queue.makeCommandBuffer() else {
+    guard
+      !isDisposed, let queue = commandQueue,
+      let commandBuffer = queue.makeCommandBuffer()
+    else {
       print("Error: Failed to create command buffer for backward query (disposed: \(isDisposed))")
       return nil
     }
@@ -883,21 +886,25 @@ extension QuantizedAttention {
     // Set quantization parameters
     var qScale = query.parameters.scale
     var qZeroPoint = query.parameters.zeroPoint
-    var qStrategy = UInt32(query.parameters.strategy.rawValue)
-    var qStrategyVersion = UInt32(query.parameters.strategyVersion)
-    encoder.setBytes(&qScale, length: MemoryLayout<Float>.size, index: 7)
-    encoder.setBytes(&qZeroPoint, length: MemoryLayout<Int32>.size, index: 8)
-    encoder.setBytes(&qStrategy, length: MemoryLayout<UInt32>.size, index: 9)
-    encoder.setBytes(&qStrategyVersion, length: MemoryLayout<UInt32>.size, index: 10)
+    var scalarIndex = 7
+    encoder.setBytes(&qScale, length: MemoryLayout<Float>.size, index: scalarIndex)
+    scalarIndex += 1
+    encoder.setBytes(&qZeroPoint, length: MemoryLayout<Int32>.size, index: scalarIndex)
+    scalarIndex += 1
 
     // Set matrix dimensions
     let dims = descriptor.baseDescriptor.matrixDimensions!
     var dimensions = (UInt32(dims.row), UInt32(dims.column), UInt32(dims.head))
-    encoder.setBytes(&dimensions, length: MemoryLayout.size(ofValue: dimensions), index: 11)
+    encoder.setBytes(
+      &dimensions,
+      length: MemoryLayout.size(ofValue: dimensions),
+      index: scalarIndex
+    )
+    scalarIndex += 1
 
     // Set STE clip range
     var steClipRange: Float = 6.0
-    encoder.setBytes(&steClipRange, length: MemoryLayout<Float>.size, index: 12)
+    encoder.setBytes(&steClipRange, length: MemoryLayout<Float>.size, index: scalarIndex)
 
     // Calculate thread groups
     let threadgroupSize = MTLSize(width: 8, height: 8, depth: 1)
@@ -938,9 +945,13 @@ extension QuantizedAttention {
   )
     -> MTLCommandBuffer?
   {
-    guard !isDisposed, let queue = commandQueue,
-          let commandBuffer = queue.makeCommandBuffer() else {
-      print("Error: Failed to create command buffer for backward key-value (disposed: \(isDisposed))")
+    guard
+      !isDisposed, let queue = commandQueue,
+      let commandBuffer = queue.makeCommandBuffer()
+    else {
+      print(
+        "Error: Failed to create command buffer for backward key-value (disposed: \(isDisposed))"
+      )
       return nil
     }
 
@@ -975,38 +986,37 @@ extension QuantizedAttention {
     // Set quantization parameters for Q, K, V
     var qScale = query.parameters.scale
     var qZeroPoint = query.parameters.zeroPoint
-    var qStrategy = UInt32(query.parameters.strategy.rawValue)
-    var qStrategyVersion = UInt32(query.parameters.strategyVersion)
     var kScale = key.parameters.scale
     var kZeroPoint = key.parameters.zeroPoint
-    var kStrategy = UInt32(key.parameters.strategy.rawValue)
-    var kStrategyVersion = UInt32(key.parameters.strategyVersion)
     var vScale = value.parameters.scale
     var vZeroPoint = value.parameters.zeroPoint
-    var vStrategy = UInt32(value.parameters.strategy.rawValue)
-    var vStrategyVersion = UInt32(value.parameters.strategyVersion)
-
-    encoder.setBytes(&qScale, length: MemoryLayout<Float>.size, index: 8)
-    encoder.setBytes(&qZeroPoint, length: MemoryLayout<Int32>.size, index: 9)
-    encoder.setBytes(&qStrategy, length: MemoryLayout<UInt32>.size, index: 10)
-    encoder.setBytes(&qStrategyVersion, length: MemoryLayout<UInt32>.size, index: 11)
-    encoder.setBytes(&kScale, length: MemoryLayout<Float>.size, index: 12)
-    encoder.setBytes(&kZeroPoint, length: MemoryLayout<Int32>.size, index: 13)
-    encoder.setBytes(&kStrategy, length: MemoryLayout<UInt32>.size, index: 14)
-    encoder.setBytes(&kStrategyVersion, length: MemoryLayout<UInt32>.size, index: 15)
-    encoder.setBytes(&vScale, length: MemoryLayout<Float>.size, index: 16)
-    encoder.setBytes(&vZeroPoint, length: MemoryLayout<Int32>.size, index: 17)
-    encoder.setBytes(&vStrategy, length: MemoryLayout<UInt32>.size, index: 18)
-    encoder.setBytes(&vStrategyVersion, length: MemoryLayout<UInt32>.size, index: 19)
+    var scalarIndex = 8
+    encoder.setBytes(&qScale, length: MemoryLayout<Float>.size, index: scalarIndex)
+    scalarIndex += 1
+    encoder.setBytes(&qZeroPoint, length: MemoryLayout<Int32>.size, index: scalarIndex)
+    scalarIndex += 1
+    encoder.setBytes(&kScale, length: MemoryLayout<Float>.size, index: scalarIndex)
+    scalarIndex += 1
+    encoder.setBytes(&kZeroPoint, length: MemoryLayout<Int32>.size, index: scalarIndex)
+    scalarIndex += 1
+    encoder.setBytes(&vScale, length: MemoryLayout<Float>.size, index: scalarIndex)
+    scalarIndex += 1
+    encoder.setBytes(&vZeroPoint, length: MemoryLayout<Int32>.size, index: scalarIndex)
+    scalarIndex += 1
 
     // Set matrix dimensions
     let dims = descriptor.baseDescriptor.matrixDimensions!
     var dimensions = (UInt32(dims.row), UInt32(dims.column), UInt32(dims.head))
-    encoder.setBytes(&dimensions, length: MemoryLayout.size(ofValue: dimensions), index: 20)
+    encoder.setBytes(
+      &dimensions,
+      length: MemoryLayout.size(ofValue: dimensions),
+      index: scalarIndex
+    )
+    scalarIndex += 1
 
     // Set STE clip range
     var steClipRange: Float = 6.0
-    encoder.setBytes(&steClipRange, length: MemoryLayout<Float>.size, index: 21)
+    encoder.setBytes(&steClipRange, length: MemoryLayout<Float>.size, index: scalarIndex)
 
     // Calculate thread groups
     let threadgroupSize = MTLSize(width: 8, height: 8, depth: 1)
