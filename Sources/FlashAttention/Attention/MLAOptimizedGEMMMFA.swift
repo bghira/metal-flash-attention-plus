@@ -86,6 +86,12 @@ public class MLAOptimizedGEMMMFA {
     }
   }
 
+  /// Load pre-trained decompression weights
+  public func loadWeights(wk: MTLBuffer, wv: MTLBuffer) {
+    wDecompressK = wk
+    wDecompressV = wv
+  }
+
   /// Execute GEMM using MFA's generated kernel
   /// C[M,N] = A[M,K] @ B[K,N]
   public func encodeGEMM(

@@ -401,7 +401,6 @@ final class MultiHeadAttentionTest: XCTestCase {
       print("  \(mode): \(String(format: "%.3f", time * 1000))")
     }
 
-    // Verify expected performance ordering: MQA <= GQA <= Standard
     // More lenient tolerance for CI environments with variable GPU performance
     XCTAssertLessThanOrEqual(
       results["MQA"]!,

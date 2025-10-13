@@ -1,14 +1,56 @@
-# FlashAttention (Metal Port)
+# Metal Flash Attention (Plus)
 
-This repository ports the official implementation of [FlashAttention](https://github.com/Dao-AILab/flash-attention) to Apple silicon. It is a minimal, maintainable set of source files that reproduces the FlashAttention algorithm.
+This repository is a fork of [Philip Turner's metal-flash-attention](https://github.com/philipturner/metal-flash-attention), which ports the official implementation of [FlashAttention](https://github.com/Dao-AILab/flash-attention) to Apple silicon. This fork builds upon Philip's foundational work with extensive enhancements for production use cases.
 
-## Documentation
+**Original Repository:** [philipturner/metal-flash-attention](https://github.com/philipturner/metal-flash-attention)
 
-Single-headed attention only, to focus on the core bottlenecks of different attention algorithms (register pressure, parallelism). With the basic algorithm done correctly, it should be comparatively trivial to add customizations like block sparsity.
+## Features Added in This Fork
 
-## GLUON Optimisations
+Since forking from the original repository (after commit 8671cdd), this enhanced version adds:
 
-Following the [GLUON](https://github.com/triton-lang/triton/blob/main/python/examples/gluon/01-attention-forward.py) example from the Triton project, mutliple optimisations have been implemented with adjustments for the Metal hardware API.
+### Multi-Latent Attention (MLA)
+
+- **MFA-GEMM Optimized MLA**: High-performance Multi-Latent Attention kernels using optimized GEMM operations
+- **Compressed MLA Kernels**: Memory-efficient `mlaCompressed` kernel types for reduced memory footprint
+- **Sparse MLA Support**: Sparse attention patterns with blockwise compensation for MLA architectures
+- **Sparse Quantized MLA**: Combined sparse and quantized operations for maximum efficiency
+
+### Advanced Masking & Sparsity
+
+- **FlexAttention-Style Block Masking**: Generalized sparsity patterns compatible with PyTorch's FlexAttention API
+- **External Mask Support**: `applyExternalMask` for arbitrary binary or bias masks with automatic vectorization
+- **Optimized Sparse Attention**: Block sparsity for softmax with efficient mask loading
+- **Optional Sparse Mask Pass-Through**: Configurable sparsity for different use cases
+
+### Enhanced Quantization
+
+- **Native Runtime Quantization**: Dynamic quantization without code generation overhead
+- **Quantized GEMM Kernels**: Hardware-accelerated INT4/INT8 GEMM with blockwise compensation
+- **Improved Quantization Training**: Enhanced straight-through estimator (STE) for QAT
+- **Quantized Backward Pass**: Full training support with quantization-aware gradients
+- **Flexible Precision Configuration**: Per-tensor precision control for mixed quantization strategies
+
+### Memory & Performance Optimizations
+
+- **Stride-Aware Operations**: Native support for non-contiguous memory layouts, eliminating forced copies
+- **BF16 NaN Fix**: FP32 accumulation path resolving BF16 numerical instability
+- **Vectorized Quantized Loads**: 2.5x faster INT8 operations through `char4` memory access patterns
+- **Parallel Multi-Head Attention**: Efficient parallel execution across attention heads
+
+### API Enhancements
+
+- **Scale Parameter Control**: Configurable attention scale factor (default: 1/√d)
+- **QuantizationParameters API**: Unified interface for scale and zero-point configuration
+- **Multi-Head Configuration**: Simplified API for grouped query attention and MQA
+- **External Mask Buffers**: Performance-optimized mask handling with arbitrary mask types
+
+### GLUON Optimizations
+
+Following the [GLUON example](https://github.com/triton-lang/triton/blob/main/python/examples/gluon/01-attention-forward.py) from the Triton project, multiple Metal-specific optimizations have been implemented (see [GLUON_OPTIMIZATIONS.md](./Documentation/GLUON_OPTIMIZATIONS.md)).
+
+## About This Implementation
+
+This implementation focuses on core algorithmic bottlenecks (register pressure, parallelism) with production-ready features including multi-head support, advanced masking, quantization, and sparse attention patterns.
 
 ## Masking Support
 
