@@ -7,14 +7,6 @@
 
 import Metal
 
-private struct MultiHeadParams {
-  var enabled: UInt32
-  var numHeads: UInt32
-  var numKVHeads: UInt32
-  var headDimension: UInt32
-  var sequenceLength: UInt32
-}
-
 /// Multi-head flash attention implementation with optimized broadcast semantics
 public class MultiHeadAttention {
   private let device: MTLDevice
@@ -132,31 +124,47 @@ public class MultiHeadAttention {
     for binding in quantBindings {
       var scale = binding.parameters.scale
       var zeroPoint = binding.parameters.zeroPoint
+      var strategy = UInt32(binding.parameters.strategy.rawValue)
+      var strategyVersion = UInt32(binding.parameters.strategyVersion)
 
       encoder.setBytes(&scale, length: MemoryLayout<Float>.size, index: bufferIndex)
       bufferIndex += 1
 
       encoder.setBytes(&zeroPoint, length: MemoryLayout<Int32>.size, index: bufferIndex)
       bufferIndex += 1
+
+      encoder.setBytes(&strategy, length: MemoryLayout<UInt32>.size, index: bufferIndex)
+      bufferIndex += 1
+
+      encoder.setBytes(&strategyVersion, length: MemoryLayout<UInt32>.size, index: bufferIndex)
+      bufferIndex += 1
     }
 
     let multiHeadParamIndex = bufferIndex
 
     // Set multi-head parameters
-    var multiHeadParams = MultiHeadParams(
-      enabled: 1,
-      numHeads: UInt32(descriptor.queryShape.numHeads),
-      numKVHeads: UInt32(descriptor.keyShape.numHeads),
-      headDimension: UInt32(descriptor.queryShape.headDimension),
-      sequenceLength: UInt32(descriptor.queryShape.sequenceLength)
-    )
-    encoder.setBytes(&multiHeadParams, length: MemoryLayout<MultiHeadParams>.size, index: multiHeadParamIndex)
+    var numHeads = descriptor.queryShape.numHeads
+    var numKVHeads = descriptor.keyShape.numHeads
+    var headDimension = UInt32(descriptor.queryShape.headDimension)
+    var sequenceLength = descriptor.queryShape.sequenceLength
 
-    let maskIndex = multiHeadParamIndex + 1
+    encoder.setBytes(&numHeads, length: MemoryLayout<UInt32>.size, index: multiHeadParamIndex)
+    encoder.setBytes(&numKVHeads, length: MemoryLayout<UInt32>.size, index: multiHeadParamIndex + 1)
+    encoder.setBytes(
+      &headDimension,
+      length: MemoryLayout<UInt32>.size,
+      index: multiHeadParamIndex + 2
+    )
+    encoder.setBytes(
+      &sequenceLength,
+      length: MemoryLayout<UInt32>.size,
+      index: multiHeadParamIndex + 3
+    )
+
     if let maskBuffer {
-      encoder.setBuffer(maskBuffer, offset: 0, index: maskIndex)
+      encoder.setBuffer(maskBuffer, offset: 0, index: multiHeadParamIndex + 4)
     } else {
-      encoder.setBuffer(nil, offset: 0, index: maskIndex)
+      encoder.setBuffer(nil, offset: 0, index: multiHeadParamIndex + 4)
     }
 
     // Set threadgroup memory
@@ -245,30 +253,47 @@ public class MultiHeadAttention {
     for binding in quantBindings {
       var scale = binding.parameters.scale
       var zeroPoint = binding.parameters.zeroPoint
+      var strategy = UInt32(binding.parameters.strategy.rawValue)
+      var strategyVersion = UInt32(binding.parameters.strategyVersion)
 
       encoder.setBytes(&scale, length: MemoryLayout<Float>.size, index: bufferIndex)
       bufferIndex += 1
 
       encoder.setBytes(&zeroPoint, length: MemoryLayout<Int32>.size, index: bufferIndex)
       bufferIndex += 1
+
+      encoder.setBytes(&strategy, length: MemoryLayout<UInt32>.size, index: bufferIndex)
+      bufferIndex += 1
+
+      encoder.setBytes(&strategyVersion, length: MemoryLayout<UInt32>.size, index: bufferIndex)
+      bufferIndex += 1
     }
 
     let multiHeadParamIndex = bufferIndex
 
-    var multiHeadParams = MultiHeadParams(
-      enabled: 1,
-      numHeads: UInt32(descriptor.queryShape.numHeads),
-      numKVHeads: UInt32(descriptor.keyShape.numHeads),
-      headDimension: UInt32(descriptor.queryShape.headDimension),
-      sequenceLength: UInt32(descriptor.queryShape.sequenceLength)
-    )
-    encoder.setBytes(&multiHeadParams, length: MemoryLayout<MultiHeadParams>.size, index: multiHeadParamIndex)
+    // Set multi-head parameters at correct indices
+    var numHeads = descriptor.queryShape.numHeads
+    var numKVHeads = descriptor.keyShape.numHeads
+    var headDimension = UInt32(descriptor.queryShape.headDimension)
+    var sequenceLength = descriptor.queryShape.sequenceLength
 
-    let maskIndex = multiHeadParamIndex + 1
+    encoder.setBytes(&numHeads, length: MemoryLayout<UInt32>.size, index: multiHeadParamIndex)
+    encoder.setBytes(&numKVHeads, length: MemoryLayout<UInt32>.size, index: multiHeadParamIndex + 1)
+    encoder.setBytes(
+      &headDimension,
+      length: MemoryLayout<UInt32>.size,
+      index: multiHeadParamIndex + 2
+    )
+    encoder.setBytes(
+      &sequenceLength,
+      length: MemoryLayout<UInt32>.size,
+      index: multiHeadParamIndex + 3
+    )
+
     if let maskBuffer {
-      encoder.setBuffer(maskBuffer, offset: 0, index: maskIndex)
+      encoder.setBuffer(maskBuffer, offset: 0, index: multiHeadParamIndex + 4)
     } else {
-      encoder.setBuffer(nil, offset: 0, index: maskIndex)
+      encoder.setBuffer(nil, offset: 0, index: multiHeadParamIndex + 4)
     }
 
     // Set threadgroup memory
