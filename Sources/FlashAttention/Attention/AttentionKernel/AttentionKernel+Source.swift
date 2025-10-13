@@ -58,13 +58,12 @@ public extension AttentionKernel {
       // Check if multi-head parameters are provided
       // For single-head kernels created directly (not via MultiHeadAttention),
       // these pointers will be null
-      if (num_heads_ptr != nullptr && num_kv_heads_ptr != nullptr &&
-          head_dimension_ptr != nullptr && sequence_length_ptr != nullptr) {
+      if (multi_head.enabled != 0) {
         // Multi-head attention mode
-        uint num_heads = *num_heads_ptr;
-        uint num_kv_heads = *num_kv_heads_ptr;
-        uint head_dimension = *head_dimension_ptr;
-        uint sequence_length = *sequence_length_ptr;
+        uint num_heads = multi_head.num_heads;
+        uint num_kv_heads = multi_head.num_kv_heads;
+        uint head_dimension = multi_head.head_dimension;
+        uint sequence_length = multi_head.sequence_length;
 
         // Calculate buffer offsets for multi-head attention
         // Handle broadcast modes for K/V heads
@@ -76,31 +75,11 @@ public extension AttentionKernel {
 
         // Calculate offsets for this batch/head combination
         // Check if stride information is provided for non-contiguous tensor support
-        uint q_batch_head_offset = 0;
-        uint kv_batch_head_offset = 0;
-        uint o_batch_head_offset = 0;
-
-        if (Q_strides != nullptr) {
-          // Use stride-based offset calculation for non-contiguous tensors
-          // Assuming 4D tensor layout: [batch, seq, heads, dim] or [batch, heads, seq, dim]
-          // Strides tell us how to calculate the actual memory offset
-          q_batch_head_offset = batch_id * Q_strides[0] + head_id * Q_strides[2];
-        } else {
-          // Fallback to contiguous layout assumption
-          q_batch_head_offset = (batch_id * num_heads + head_id) * sequence_length * head_dimension;
-        }
-
-        if (K_strides != nullptr && V_strides != nullptr) {
-          kv_batch_head_offset = batch_id * K_strides[0] + kv_head_id * K_strides[2];
-        } else {
-          kv_batch_head_offset = (batch_id * num_kv_heads + kv_head_id) * sequence_length * head_dimension;
-        }
-
-        if (O_strides != nullptr) {
-          o_batch_head_offset = batch_id * O_strides[0] + head_id * O_strides[2];
-        } else {
-          o_batch_head_offset = q_batch_head_offset;  // Output has same shape as query
-        }
+        uint q_batch_head_offset =
+          (batch_id * num_heads + head_id) * sequence_length * head_dimension;
+        uint kv_batch_head_offset =
+          (batch_id * num_kv_heads + kv_head_id) * sequence_length * head_dimension;
+        uint o_batch_head_offset = q_batch_head_offset;  // Output has same shape as query
 
         // Apply offsets to buffer pointers based on kernel type
         // Only apply offsets if we have multiple heads or batches
@@ -121,8 +100,7 @@ public extension AttentionKernel {
     let sourceURL = URL(fileURLWithPath: "/tmp/quantized_attention_kernel.metal")
     do {
       try source.write(to: sourceURL, atomically: true, encoding: .utf8)
-    } catch {
-    }
+    } catch {}
 
     return source
   }
@@ -134,7 +112,7 @@ extension AttentionKernel {
   func createBufferOffsets() -> String {
     switch type {
     case .forward:
-      return """
+      """
       Q = Q + q_batch_head_offset;
       K = K + kv_batch_head_offset;
       V = V + kv_batch_head_offset;
@@ -142,7 +120,7 @@ extension AttentionKernel {
       L = L + (batch_id * num_heads + head_id) * sequence_length;
       """
     case .backwardQuery:
-      return """
+      """
       Q = Q + q_batch_head_offset;
       K = K + kv_batch_head_offset;
       V = V + kv_batch_head_offset;
@@ -153,7 +131,7 @@ extension AttentionKernel {
       D = D + (batch_id * num_heads + head_id) * sequence_length;
       """
     case .backwardKeyValue:
-      return """
+      """
       Q = Q + q_batch_head_offset;
       K = K + kv_batch_head_offset;
       V = V + kv_batch_head_offset;
@@ -183,6 +161,14 @@ extension AttentionKernel {
     constant bool HAS_BLOCKWISE_A [[function_constant(5)]];
     constant bool HAS_BLOCKWISE_B [[function_constant(6)]];
     constant uint BLOCK_SIZE_K [[function_constant(7)]];
+
+    struct MultiHeadParams {
+      uint enabled;
+      uint num_heads;
+      uint num_kv_heads;
+      uint head_dimension;
+      uint sequence_length;
+    };
 
     """
   }
@@ -237,15 +223,6 @@ extension AttentionKernel {
         "  constant int32_t &\(operandName)_zero_point [[buffer(\(currentBufferIndex))]], \n"
       currentBufferIndex += 1
 
-      // Quantization strategy selector
-      output +=
-        "  constant uint &\(operandName)_strategy [[buffer(\(currentBufferIndex))]], \n"
-      currentBufferIndex += 1
-
-      // Quantization strategy version for forward compatibility
-      output +=
-        "  constant uint &\(operandName)_strategy_version [[buffer(\(currentBufferIndex))]], \n"
-      currentBufferIndex += 1
     }
 
     // Third pass: blockwise quantization parameters for quantized operands
@@ -253,15 +230,18 @@ extension AttentionKernel {
       let operandName = "\(operand)".lowercased()
 
       // Block scales buffer (for per-block quantization)
-      output += "  device const float* \(operandName)_block_scales [[buffer(\(currentBufferIndex))]], \n"
+      output +=
+        "  device const float* \(operandName)_block_scales [[buffer(\(currentBufferIndex))]], \n"
       currentBufferIndex += 1
 
       // Block zero points buffer (for per-block quantization)
-      output += "  device const int32_t* \(operandName)_block_zero_points [[buffer(\(currentBufferIndex))]], \n"
+      output +=
+        "  device const int32_t* \(operandName)_block_zero_points [[buffer(\(currentBufferIndex))]], \n"
       currentBufferIndex += 1
 
       // Precomputed sums buffer (optional, mainly for weights)
-      output += "  device const float* \(operandName)_precomputed_sums [[buffer(\(currentBufferIndex))]], \n"
+      output +=
+        "  device const float* \(operandName)_precomputed_sums [[buffer(\(currentBufferIndex))]], \n"
       currentBufferIndex += 1
     }
 
@@ -270,7 +250,7 @@ extension AttentionKernel {
     let definitelyNeededOperands: [AttentionOperand] = []
 
     // Add P and V since they are used in the accumulate code (P*V -> O)
-    if operands.contains(.V) && !operands.contains(where: { $0 == .V && isQuantized($0) }) {
+    if operands.contains(.V), !operands.contains(where: { $0 == .V && isQuantized($0) }) {
       output += "  device const float* v_block_scales [[buffer(\(currentBufferIndex))]], \n"
       currentBufferIndex += 1
       output += "  device const int32_t* v_block_zero_points [[buffer(\(currentBufferIndex))]], \n"
@@ -287,45 +267,12 @@ extension AttentionKernel {
     output += "  device const float* p_precomputed_sums [[buffer(\(currentBufferIndex))]], \n"
     currentBufferIndex += 1
 
-    // Add other operands that might be used in backward passes
-    let backwardOperands: [AttentionOperand] = [.K, .dS, .dO, .dV, .dP, .dK, .dQ]
-    for operand in backwardOperands {
-      if operands.contains(operand) && !operands.contains(where: { $0 == operand && isQuantized($0) }) {
-        let operandName = "\(operand)".lowercased()
-        output += "  device const float* \(operandName)_block_scales [[buffer(\(currentBufferIndex))]], \n"
-        currentBufferIndex += 1
-        output += "  device const int32_t* \(operandName)_block_zero_points [[buffer(\(currentBufferIndex))]], \n"
-        currentBufferIndex += 1
-        output += "  device const float* \(operandName)_precomputed_sums [[buffer(\(currentBufferIndex))]], \n"
-        currentBufferIndex += 1
-      }
-    }
-
-    // Fourth pass: stride information for handling non-contiguous tensors
-    // Add stride buffers for Q, K, V, O tensors to support PyTorch non-contiguous layouts
-    let stridedOperands = [AttentionOperand.Q, AttentionOperand.K, AttentionOperand.V, AttentionOperand.O]
-    for operand in stridedOperands {
-      if !operands.contains(operand) && operand != .O {
-        continue
-      }
-
-      output += "  constant int64_t* \(operand)_strides [[buffer(\(currentBufferIndex))]], \n"
-      currentBufferIndex += 1
-    }
-
-    // Fifth pass: multi-head attention parameters (optional, with default values)
-    output += "  constant uint *num_heads_ptr [[buffer(\(currentBufferIndex))]], \n"
-    currentBufferIndex += 1
-    output += "  constant uint *num_kv_heads_ptr [[buffer(\(currentBufferIndex))]], \n"
-    currentBufferIndex += 1
-    output += "  constant uint *head_dimension_ptr [[buffer(\(currentBufferIndex))]], \n"
-    currentBufferIndex += 1
-    output += "  constant uint *sequence_length_ptr [[buffer(\(currentBufferIndex))]], \n"
+    // Fourth pass: multi-head attention parameters (optional, with default values)
+    output +=
+      "  constant MultiHeadParams &multi_head [[buffer(\(currentBufferIndex))]], \n"
     currentBufferIndex += 1
 
     output += "  device float *mask_buffer [[buffer(\(currentBufferIndex))]], \n"
-    currentBufferIndex += 1
-    output += "  constant uint &has_mask [[buffer(\(currentBufferIndex))]], \n"
     currentBufferIndex += 1
 
     return output
