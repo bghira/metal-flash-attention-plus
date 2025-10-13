@@ -12,6 +12,59 @@
 using namespace metal;
 
 #if !defined(__HAVE_BFLOAT__)
+// Provide a software fallback for bfloat when the toolchain lacks native support.
+// The implementation keeps IEEE semantics by round-tripping through float.
+namespace mfa_detail {
+inline ushort float_to_bfloat_bits(float value) {
+    uint bits = as_type<uint>(value);
+    // Round to nearest even by adding 0x7FFF plus the LSB of the target mantissa.
+    uint rounding_bias = 0x7FFF + ((bits >> 16) & 1u);
+    return ushort((bits + rounding_bias) >> 16);
+}
+
+inline float bfloat_bits_to_float(ushort bits) {
+    uint widened = uint(bits) << 16;
+    return as_type<float>(widened);
+}
+}  // namespace mfa_detail
+
+struct alignas(2) bfloat {
+    ushort storage;
+
+    bfloat() = default;
+    bfloat(const bfloat&) = default;
+    bfloat& operator=(const bfloat&) = default;
+
+    // Allow construction from common scalar types used in kernels.
+    bfloat(float value) : storage(mfa_detail::float_to_bfloat_bits(value)) {}
+    bfloat(half value) : storage(mfa_detail::float_to_bfloat_bits(float(value))) {}
+    bfloat(int value) : storage(mfa_detail::float_to_bfloat_bits(float(value))) {}
+    bfloat(uint value) : storage(mfa_detail::float_to_bfloat_bits(float(value))) {}
+
+    bfloat& operator=(float value) {
+        storage = mfa_detail::float_to_bfloat_bits(value);
+        return *this;
+    }
+
+    bfloat& operator=(half value) {
+        storage = mfa_detail::float_to_bfloat_bits(float(value));
+        return *this;
+    }
+
+    bfloat& operator=(int value) {
+        storage = mfa_detail::float_to_bfloat_bits(float(value));
+        return *this;
+    }
+
+    operator float() const {
+        return mfa_detail::bfloat_bits_to_float(storage);
+    }
+
+    operator half() const {
+        return half(mfa_detail::bfloat_bits_to_float(storage));
+    }
+};
+
 // Define bfloat vector types (Metal only has bfloat scalar type on older toolchains)
 struct packed_bfloat2 {
     bfloat x, y;
