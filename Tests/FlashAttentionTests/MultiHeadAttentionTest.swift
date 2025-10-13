@@ -9,7 +9,6 @@ import FlashAttention
 import XCTest
 
 final class MultiHeadAttentionTest: XCTestCase {
-
   private var device: MTLDevice!
   private var multiHeadAttention: MultiHeadAttention!
 
@@ -252,7 +251,7 @@ final class MultiHeadAttentionTest: XCTestCase {
     let strategies: [MultiHeadDispatchStrategy] = [
       .perBatchHead,
       .perBatch,
-      .batched
+      .batched,
     ]
 
     for strategy in strategies {
@@ -328,13 +327,12 @@ final class MultiHeadAttentionTest: XCTestCase {
         headDimension: 16
       )
 
-      let broadcastMode: MultiHeadBroadcastMode
-      if config.numKVHeads == config.numHeads {
-        broadcastMode = .standard
+      let broadcastMode: MultiHeadBroadcastMode = if config.numKVHeads == config.numHeads {
+        .standard
       } else if config.numKVHeads == 1 {
-        broadcastMode = .multiQuery
+        .multiQuery
       } else {
-        broadcastMode = .groupedQuery(numKVHeads: UInt32(config.numKVHeads))
+        .groupedQuery(numKVHeads: UInt32(config.numKVHeads))
       }
 
       validateMultiHeadAttention(
@@ -404,8 +402,16 @@ final class MultiHeadAttentionTest: XCTestCase {
     }
 
     // Verify expected performance ordering: MQA <= GQA <= Standard
-    XCTAssertLessThanOrEqual(results["MQA"]!, results["GQA"]! * 1.2, "MQA should be faster than or similar to GQA")
-    XCTAssertLessThanOrEqual(results["GQA"]!, results["Standard_MHA"]! * 1.1, "GQA should be faster than or similar to Standard MHA")
+    XCTAssertLessThanOrEqual(
+      results["MQA"]!,
+      results["GQA"]! * 1.2,
+      "MQA should be faster than or similar to GQA"
+    )
+    XCTAssertLessThanOrEqual(
+      results["GQA"]!,
+      results["Standard_MHA"]! * 1.1,
+      "GQA should be faster than or similar to Standard MHA"
+    )
   }
 
   func testQuantizationBindingsExposeStrategies() {
@@ -440,7 +446,7 @@ final class MultiHeadAttentionTest: XCTestCase {
     )
 
     let bindings = multiHeadAttention.quantizationBindings(for: descriptor)
-    let operandOrder: [AttentionOperand] = bindings.map { $0.operand }
+    let operandOrder: [AttentionOperand] = bindings.map(\.operand)
     XCTAssertEqual(operandOrder, [AttentionOperand.Q, .K])
     XCTAssertEqual(bindings[0].parameters.strategy, QuantizationStrategy.symmetric)
     XCTAssertEqual(bindings[1].parameters.strategy, QuantizationStrategy.asymmetric)
@@ -488,14 +494,16 @@ final class MultiHeadAttentionTest: XCTestCase {
     )
 
     // Execute forward pass
-    guard let commandBuffer = multiHeadAttention.forward(
-      query: queryBuffer,
-      key: keyBuffer,
-      value: valueBuffer,
-      output: outputBuffer,
-      logsumexp: logsumexpBuffer,
-      descriptor: descriptor
-    ) else {
+    guard
+      let commandBuffer = multiHeadAttention.forward(
+        query: queryBuffer,
+        key: keyBuffer,
+        value: valueBuffer,
+        output: outputBuffer,
+        logsumexp: logsumexpBuffer,
+        descriptor: descriptor
+      )
+    else {
       XCTFail("Failed to create command buffer for \(testName)")
       return
     }
@@ -527,11 +535,11 @@ final class MultiHeadAttentionTest: XCTestCase {
     let actualNumKVHeads = numKVHeads ?? numHeads
     let actualBroadcastMode = broadcastMode ?? {
       if actualNumKVHeads == numHeads {
-        return .standard
+        .standard
       } else if actualNumKVHeads == 1 {
-        return .multiQuery
+        .multiQuery
       } else {
-        return .groupedQuery(numKVHeads: UInt32(actualNumKVHeads))
+        .groupedQuery(numKVHeads: UInt32(actualNumKVHeads))
       }
     }()
 
@@ -575,14 +583,16 @@ final class MultiHeadAttentionTest: XCTestCase {
 
     // Warmup
     for _ in 0..<10 {
-      if let commandBuffer = multiHeadAttention.forward(
-        query: queryBuffer,
-        key: keyBuffer,
-        value: valueBuffer,
-        output: outputBuffer,
-        logsumexp: logsumexpBuffer,
-        descriptor: descriptor
-      ) {
+      if
+        let commandBuffer = multiHeadAttention.forward(
+          query: queryBuffer,
+          key: keyBuffer,
+          value: valueBuffer,
+          output: outputBuffer,
+          logsumexp: logsumexpBuffer,
+          descriptor: descriptor
+        )
+      {
         commandBuffer.commit()
         commandBuffer.waitUntilCompleted()
       }
@@ -593,14 +603,16 @@ final class MultiHeadAttentionTest: XCTestCase {
     let startTime = CFAbsoluteTimeGetCurrent()
 
     for _ in 0..<iterations {
-      if let commandBuffer = multiHeadAttention.forward(
-        query: queryBuffer,
-        key: keyBuffer,
-        value: valueBuffer,
-        output: outputBuffer,
-        logsumexp: logsumexpBuffer,
-        descriptor: descriptor
-      ) {
+      if
+        let commandBuffer = multiHeadAttention.forward(
+          query: queryBuffer,
+          key: keyBuffer,
+          value: valueBuffer,
+          output: outputBuffer,
+          logsumexp: logsumexpBuffer,
+          descriptor: descriptor
+        )
+      {
         commandBuffer.commit()
         commandBuffer.waitUntilCompleted()
       }
@@ -610,7 +622,8 @@ final class MultiHeadAttentionTest: XCTestCase {
     let avgTime = (endTime - startTime) / Double(iterations)
 
     // Calculate throughput
-    let totalOps = 2.0 * Double(batchSize) * Double(numHeads) * Double(sequenceLength) * Double(sequenceLength) * Double(headDimension)
+    let totalOps = 2.0 * Double(batchSize) * Double(numHeads) * Double(sequenceLength) *
+      Double(sequenceLength) * Double(headDimension)
     let gops = totalOps / (avgTime * 1e9)
 
     if !silent {
@@ -624,18 +637,34 @@ final class MultiHeadAttentionTest: XCTestCase {
     queryShape: MultiHeadShape,
     keyShape: MultiHeadShape,
     valueShape: MultiHeadShape
-  ) -> (MTLBuffer, MTLBuffer, MTLBuffer, MTLBuffer, MTLBuffer) {
+  )
+    -> (MTLBuffer, MTLBuffer, MTLBuffer, MTLBuffer, MTLBuffer)
+  {
     // Create random test data
     let queryData = generateRandomData(count: Int(queryShape.totalElements))
     let keyData = generateRandomData(count: Int(keyShape.totalElements))
     let valueData = generateRandomData(count: Int(valueShape.totalElements))
 
     guard
-      let queryBuffer = device.makeBuffer(bytes: queryData, length: queryData.count * MemoryLayout<Float>.size),
-      let keyBuffer = device.makeBuffer(bytes: keyData, length: keyData.count * MemoryLayout<Float>.size),
-      let valueBuffer = device.makeBuffer(bytes: valueData, length: valueData.count * MemoryLayout<Float>.size),
-      let outputBuffer = device.makeBuffer(length: Int(queryShape.totalElements) * MemoryLayout<Float>.size),
-      let logsumexpBuffer = device.makeBuffer(length: Int(queryShape.batchSize * queryShape.numHeads * queryShape.sequenceLength) * MemoryLayout<Float>.size)
+      let queryBuffer = device.makeBuffer(
+        bytes: queryData,
+        length: queryData.count * MemoryLayout<Float>.size
+      ),
+      let keyBuffer = device.makeBuffer(
+        bytes: keyData,
+        length: keyData.count * MemoryLayout<Float>.size
+      ),
+      let valueBuffer = device.makeBuffer(
+        bytes: valueData,
+        length: valueData.count * MemoryLayout<Float>.size
+      ),
+      let outputBuffer = device
+        .makeBuffer(length: Int(queryShape.totalElements) * MemoryLayout<Float>.size),
+      let logsumexpBuffer = device
+        .makeBuffer(length: Int(
+          queryShape.batchSize * queryShape.numHeads * queryShape
+            .sequenceLength
+        ) * MemoryLayout<Float>.size)
     else {
       fatalError("Failed to create Metal buffers")
     }
@@ -654,8 +683,17 @@ final class MultiHeadAttentionTest: XCTestCase {
     testName: String
   ) {
     // Basic validation: check for NaN/Inf values
-    let outputPointer = outputBuffer.contents().bindMemory(to: Float.self, capacity: Int(descriptor.queryShape.totalElements))
-    let logsumexpPointer = logsumexpBuffer.contents().bindMemory(to: Float.self, capacity: Int(descriptor.queryShape.batchSize * descriptor.queryShape.numHeads * descriptor.queryShape.sequenceLength))
+    let outputPointer = outputBuffer.contents().bindMemory(
+      to: Float.self,
+      capacity: Int(descriptor.queryShape.totalElements)
+    )
+    let logsumexpPointer = logsumexpBuffer.contents().bindMemory(
+      to: Float.self,
+      capacity: Int(
+        descriptor.queryShape.batchSize * descriptor.queryShape.numHeads * descriptor
+          .queryShape.sequenceLength
+      )
+    )
 
     for i in 0..<Int(descriptor.queryShape.totalElements) {
       let value = outputPointer[i]
@@ -663,7 +701,10 @@ final class MultiHeadAttentionTest: XCTestCase {
       XCTAssertFalse(value.isInfinite, "Output contains Inf at index \(i) in \(testName)")
     }
 
-    for i in 0..<Int(descriptor.queryShape.batchSize * descriptor.queryShape.numHeads * descriptor.queryShape.sequenceLength) {
+    for i in 0..<Int(
+      descriptor.queryShape.batchSize * descriptor.queryShape.numHeads * descriptor
+        .queryShape.sequenceLength
+    ) {
       let value = logsumexpPointer[i]
       XCTAssertFalse(value.isNaN, "Logsumexp contains NaN at index \(i) in \(testName)")
       XCTAssertFalse(value.isInfinite, "Logsumexp contains Inf at index \(i) in \(testName)")
