@@ -629,10 +629,23 @@ func createMetalSimdgroupMatrixStorage() -> String {
         return reinterpret_cast<thread vec<T, 2>*>(&t);
       }
 
+      METAL_FUNC thread const vec<T, 2>* thread_elements() const thread {
+        return reinterpret_cast<thread const vec<T, 2>*>(&t);
+      }
+
       METAL_FUNC simdgroup_matrix_storage() thread = default;
 
       METAL_FUNC simdgroup_matrix_storage(vec<T, 2> thread_elements) thread {
         *(this->thread_elements()) = thread_elements;
+      }
+
+      METAL_FUNC simdgroup_matrix_storage(thread const simdgroup_matrix_storage &other) thread {
+        *(this->thread_elements()) = *(other.thread_elements());
+      }
+
+      METAL_FUNC thread simdgroup_matrix_storage& operator=(thread const simdgroup_matrix_storage &other) thread {
+        *(this->thread_elements()) = *(other.thread_elements());
+        return *this;
       }
 
       METAL_FUNC explicit simdgroup_matrix_storage(T value) thread {
