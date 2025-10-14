@@ -5,11 +5,11 @@
 //  Created by Philip Turner on 6/26/24.
 //
 
-import Metal
+@preconcurrency import Metal
 
-public struct MTLContext {
-  public var device: MTLDevice
-  public var commandQueue: MTLCommandQueue
+public struct MTLContext: @unchecked Sendable {
+  public let device: MTLDevice
+  public let commandQueue: MTLCommandQueue
 
   public static let global = MTLContext()
 

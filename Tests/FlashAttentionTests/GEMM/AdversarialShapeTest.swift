@@ -149,7 +149,10 @@ private func runCorrectnessTest(descriptor: GEMMDescriptor) {
 
   // Generate the kernel.
   GEMMKernel.register(descriptor: descriptor)
-  let (kernel, pipeline) = GEMMKernel.pipelineCache[descriptor]!
+  guard let (kernel, pipeline) = GEMMKernel.cachedPipeline(for: descriptor) else {
+    XCTFail("Expected cached pipeline to be available after registration.")
+    return
+  }
 
   let checkpoint2 = CACurrentMediaTime()
 

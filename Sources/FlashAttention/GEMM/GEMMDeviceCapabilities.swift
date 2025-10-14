@@ -56,13 +56,13 @@ public extension MTLDevice {
   /// Check if device has native BFloat16 support
   /// Requires Apple9 family and compatible OS version
   var supportsBFloat16: Bool {
-    // BFloat16 support requires Apple9 family (M3+) and macOS 14.0+
+    // BFloat16 support requires Apple9 family (M3+) and macOS 15.0+
     guard supportsFamily(.apple9) else {
       return false
     }
 
     // Additional OS version check for BF16 availability
-    if #available(macOS 14.0, iOS 17.0, *) {
+    if #available(macOS 15.0, iOS 17.0, *) {
       return true
     } else {
       return false

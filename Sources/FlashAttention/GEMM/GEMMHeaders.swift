@@ -12,7 +12,7 @@ enum GEMMBFloatHeaderEmbedder {
     let fileURL = URL(fileURLWithPath: #filePath)
     let directory = fileURL.deletingLastPathComponent()
     let headerURL = directory.appendingPathComponent("GEMMBFloatTypes.h")
-    return (try? String(contentsOf: headerURL)) ?? ""
+    return (try? String(contentsOf: headerURL, encoding: .utf8)) ?? ""
   }()
 
   static func embed(into source: String) -> String {

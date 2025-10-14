@@ -4,7 +4,24 @@
 //
 //
 
-import Metal
+@preconcurrency import Metal
+
+private enum QuantizedTensorCoding {
+  static let deviceKey: CodingUserInfoKey = {
+    guard let key = CodingUserInfoKey(rawValue: "MFAQuantizedTensorDevice") else {
+      fatalError("Failed to create coding key for quantized tensor device.")
+    }
+    return key
+  }()
+
+  final class DeviceBox: @unchecked Sendable {
+    let device: MTLDevice
+
+    init(device: MTLDevice) {
+      self.device = device
+    }
+  }
+}
 
 /// Quantization mode specifying the granularity of quantization
 public enum QuantizationMode: Codable {
@@ -809,10 +826,13 @@ public class QuantizedTensor: Codable {
     originalShape = header.shape
     blockSizeK = header.blockSizeK
 
-    // We need a device to create buffers - this is a limitation of the Codable approach
-    // In practice, you would need to provide the device through a separate method
-    // For now, we'll assume MTLCreateSystemDefaultDevice() is available
-    guard let device = MTLCreateSystemDefaultDevice() else {
+    // Retrieve the device that will own the decoded buffers.
+    let device: MTLDevice
+    if let box = decoder.userInfo[QuantizedTensorCoding.deviceKey] as? QuantizedTensorCoding.DeviceBox {
+      device = box.device
+    } else if let defaultDevice = MTLCreateSystemDefaultDevice() {
+      device = defaultDevice
+    } else {
       throw DecodingError.dataCorrupted(
         DecodingError.Context(
           codingPath: decoder.codingPath,
@@ -860,36 +880,8 @@ public class QuantizedTensor: Codable {
   public static func decode(from data: Data, device: MTLDevice) throws -> QuantizedTensor {
     let decoder = JSONDecoder()
 
-    // Create a custom decoder that can access the device
-    class DeviceAwareDecoder: Decoder {
-      let device: MTLDevice
-      let baseDecoder: Decoder
-
-      init(device: MTLDevice, baseDecoder: Decoder) {
-        self.device = device
-        self.baseDecoder = baseDecoder
-      }
-
-      var codingPath: [CodingKey] { baseDecoder.codingPath }
-      var userInfo: [CodingUserInfoKey: Any] { baseDecoder.userInfo }
-
-      func container<Key>(keyedBy type: Key.Type) throws -> KeyedDecodingContainer<Key>
-        where Key: CodingKey
-      {
-        try baseDecoder.container(keyedBy: type)
-      }
-
-      func unkeyedContainer() throws -> UnkeyedDecodingContainer {
-        try baseDecoder.unkeyedContainer()
-      }
-
-      func singleValueContainer() throws -> SingleValueDecodingContainer {
-        try baseDecoder.singleValueContainer()
-      }
-    }
-
     // Store device in userInfo for access during decoding
-    decoder.userInfo[CodingUserInfoKey(rawValue: "MTLDevice")!] = device
+    decoder.userInfo[QuantizedTensorCoding.deviceKey] = QuantizedTensorCoding.DeviceBox(device: device)
 
     return try decoder.decode(QuantizedTensor.self, from: data)
   }

@@ -187,7 +187,10 @@ private func profileProblemSize(
   do {
     // Generate the kernel.
     GEMMKernel.register(descriptor: descriptor)
-    let (kernel, pipeline) = GEMMKernel.pipelineCache[descriptor]!
+    guard let (kernel, pipeline) = GEMMKernel.cachedPipeline(for: descriptor) else {
+      XCTFail("Expected cached pipeline to be available after registration.")
+      return
+    }
     occupancy = pipeline.maxTotalThreadsPerThreadgroup
 
     // Create the buffers.

@@ -114,7 +114,7 @@ public class MLAOptimizedGEMMMFA {
     GEMMKernel.register(descriptor: desc)
 
     // Retrieve cached kernel and pipeline
-    guard let (kernel, pipeline) = GEMMKernel.pipelineCache[desc] else {
+    guard let (kernel, pipeline) = GEMMKernel.cachedPipeline(for: desc) else {
       fatalError("GEMM kernel not found in cache for \(M)×\(N)×\(K)")
     }
 
