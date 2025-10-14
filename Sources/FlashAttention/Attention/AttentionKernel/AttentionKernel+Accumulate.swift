@@ -62,7 +62,7 @@ extension AttentionKernel {
       #pragma clang loop unroll(full)
       for (ushort d = 0; d < \(descriptor.registerSize); d += 8) {
         auto \(C) = \(C)_sram + (\(descriptor.registerOffset) + d) / 8;
-        *\(C) = simdgroup_matrix_storage<\(registerName(C))>(0);
+        *(\(C)->thread_elements()) = vec<\(registerName(C)), 2>(0);
       }
 
       """

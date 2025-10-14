@@ -639,19 +639,6 @@ func createMetalSimdgroupMatrixStorage() -> String {
         *(this->thread_elements()) = thread_elements;
       }
 
-      METAL_FUNC simdgroup_matrix_storage(thread const simdgroup_matrix_storage &other) thread {
-        *(this->thread_elements()) = *(other.thread_elements());
-      }
-
-      METAL_FUNC thread simdgroup_matrix_storage& operator=(thread const simdgroup_matrix_storage &other) thread {
-        *(this->thread_elements()) = *(other.thread_elements());
-        return *this;
-      }
-
-      METAL_FUNC explicit simdgroup_matrix_storage(T value) thread {
-        *(this->thread_elements()) = vec<T, 2>(value);
-      }
-
       METAL_FUNC static device T* apply_offset(device T *src, uint elements_per_row, uint2 matrix_origin, bool transpose_matrix = false) {
         if (transpose_matrix) {
           return src + ulong(matrix_origin.x * elements_per_row) + matrix_origin.y;
