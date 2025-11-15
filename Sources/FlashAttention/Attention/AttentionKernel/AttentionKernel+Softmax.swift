@@ -691,6 +691,9 @@ extension AttentionKernel {
     l_new += simd_shuffle_xor(l_new, 1);
     l_new += simd_shuffle_xor(l_new, 8);
     l = l * correction + l_new;
+    if (!(l > 0.0f)) {
+      l = numeric_limits<float>::min();
+    }
 
     """
   }

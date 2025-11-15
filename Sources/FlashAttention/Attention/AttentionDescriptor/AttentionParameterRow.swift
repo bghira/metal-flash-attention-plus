@@ -40,9 +40,13 @@ extension AttentionParameterRow {
           $0 == 0x20
         })
 
+        if let nullIndex = characters.firstIndex(of: 0) {
+          characters.remove(at: nullIndex)
+        }
+        let bytes = characters.map { UInt8(bitPattern: $0) }
+
         // Overwrite the segment with the trimmed one.
-        let trimmedSegment = String(validatingUTF8: Array(characters))
-        guard let trimmedSegment else {
+        guard let trimmedSegment = String(validating: bytes, as: UTF8.self) else {
           fatalError("UTF-8 was invalid.")
         }
         segments[segmentID] = trimmedSegment

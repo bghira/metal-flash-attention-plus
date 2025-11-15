@@ -5,7 +5,53 @@
 //  Created by Philip Turner on 6/21/24.
 //
 
-import Metal
+import Foundation
+@preconcurrency import Metal
+
+private extension NSLock {
+  func withLock<T>(_ body: () throws -> T) rethrows -> T {
+    lock()
+    defer { unlock() }
+    return try body()
+  }
+}
+
+private final class GEMMKernelCache: @unchecked Sendable {
+  static let shared = GEMMKernelCache()
+
+  private let lock = NSLock()
+  private var libraryCache: [GEMMKernelDescriptor: GEMMKernel.LibraryValue] = [:]
+  private var pipelineCache: [GEMMDescriptor: GEMMKernel.PipelineValue] = [:]
+
+  func cachedPipeline(for descriptor: GEMMDescriptor) -> GEMMKernel.PipelineValue? {
+    lock.withLock {
+      pipelineCache[descriptor]
+    }
+  }
+
+  func storePipeline(_ value: GEMMKernel.PipelineValue, for descriptor: GEMMDescriptor) {
+    lock.withLock {
+      pipelineCache[descriptor] = value
+    }
+  }
+
+  func cachedLibrary(
+    for descriptor: GEMMKernelDescriptor
+  ) -> GEMMKernel.LibraryValue? {
+    lock.withLock {
+      libraryCache[descriptor]
+    }
+  }
+
+  func storeLibrary(
+    _ value: GEMMKernel.LibraryValue,
+    for descriptor: GEMMKernelDescriptor
+  ) {
+    lock.withLock {
+      libraryCache[descriptor] = value
+    }
+  }
+}
 
 public extension GEMMKernel {
   typealias LibraryValue = (
@@ -15,14 +61,17 @@ public extension GEMMKernel {
     kernel: GEMMKernel, pipeline: MTLComputePipelineState
   )
 
-  static var libraryCache: [GEMMKernelDescriptor: LibraryValue] = [:]
-  static var pipelineCache: [GEMMDescriptor: PipelineValue] = [:]
+  static func cachedPipeline(for descriptor: GEMMDescriptor) -> PipelineValue? {
+    GEMMKernelCache.shared.cachedPipeline(for: descriptor)
+  }
 }
 
 public extension GEMMKernel {
   // Register this problem configuration in the cache.
   static func register(descriptor: GEMMDescriptor) {
-    guard pipelineCache[descriptor] == nil else {
+    let cache = GEMMKernelCache.shared
+
+    guard cache.cachedPipeline(for: descriptor) == nil else {
       return
     }
 
@@ -42,29 +91,21 @@ public extension GEMMKernel {
       }
     }
 
-    func createLibrary(
-      _ kernelDescriptor: GEMMKernelDescriptor
-    )
-      -> LibraryValue
-    {
-      if let output = GEMMKernel.libraryCache[kernelDescriptor] {
-        return output
-      } else {
-        let kernel = GEMMKernel(descriptor: kernelDescriptor)
-        let source = kernel.createSource()
-        let library = try! device.makeLibrary(source: source, options: nil)
-
-        let output = (kernel, library)
-        GEMMKernel.libraryCache[kernelDescriptor] = output
-        return output
+    func createLibrary(_ kernelDescriptor: GEMMKernelDescriptor) -> LibraryValue {
+      if let cached = cache.cachedLibrary(for: kernelDescriptor) {
+        return cached
       }
+
+      let kernel = GEMMKernel(descriptor: kernelDescriptor)
+      let source = kernel.createSource()
+      let library = try! device.makeLibrary(source: source, options: nil)
+
+      let output = (kernel, library)
+      cache.storeLibrary(output, for: kernelDescriptor)
+      return output
     }
 
-    func createPipeline(
-      _ libraryValue: LibraryValue
-    )
-      -> PipelineValue
-    {
+    func createPipeline(_ libraryValue: LibraryValue) -> PipelineValue {
       let constants = MTLFunctionConstantValues()
       descriptor.setFunctionConstants(constants)
 
@@ -122,11 +163,13 @@ public extension GEMMKernel {
       })
 
       // Choose the highest-performing candidate.
-      GEMMKernel.pipelineCache[descriptor] = candidates.last!
+      if let selected = candidates.last {
+        cache.storePipeline(selected, for: descriptor)
+      }
     } else {
       let libraryValue = createLibrary(kernelDescriptor)
       let pipelineValue = createPipeline(libraryValue)
-      GEMMKernel.pipelineCache[descriptor] = pipelineValue
+      cache.storePipeline(pipelineValue, for: descriptor)
     }
   }
 }

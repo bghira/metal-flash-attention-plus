@@ -6,14 +6,14 @@ import Foundation
 /// generator, and the C FFI can agree on binding indices without keeping
 /// separate tables in sync.
 public enum QuantizedKernelLayoutManifest {
-  public enum Kernel: Int32 {
+  public enum Kernel: Int32, Sendable {
     case forward = 0
     case backwardQuery = 1
     case backwardKeyValue = 2
     case mlaCompressed = 3
   }
 
-  public enum Key: String, CaseIterable {
+  public enum Key: String, CaseIterable, Sendable {
     case qData
     case kData
     case vData
@@ -129,7 +129,7 @@ public enum QuantizedKernelLayoutManifest {
   }()
 
   /// Lightweight view that exposes typed subscripts.
-  public struct Layout {
+  public struct Layout: Sendable {
     public let kernel: Kernel
     private let indices: [Key: Int]
 

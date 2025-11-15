@@ -45,7 +45,7 @@ extension AttentionKernel {
       #pragma clang loop unroll(full)
       for (ushort c = 0; c < \(blockDimensions.traversal); c += 8) {
         auto \(C) = \(C)_sram + c / 8;
-        *\(C) = simdgroup_matrix_storage<\(registerName(C))>(0);
+        *(\(C)->thread_elements()) = vec<\(registerName(C)), 2>(0);
       }
 
       """

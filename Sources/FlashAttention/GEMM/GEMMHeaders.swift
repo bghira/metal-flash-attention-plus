@@ -5,6 +5,30 @@
 //  Created by Philip Turner on 6/21/24.
 //
 
+import Foundation
+
+enum GEMMBFloatHeaderEmbedder {
+  private static let headerSource: String = {
+    let fileURL = URL(fileURLWithPath: #filePath)
+    let directory = fileURL.deletingLastPathComponent()
+    let headerURL = directory.appendingPathComponent("GEMMBFloatTypes.h")
+    return (try? String(contentsOf: headerURL, encoding: .utf8)) ?? ""
+  }()
+
+  static func embed(into source: String) -> String {
+    let includeDirective = "#include \"GEMMBFloatTypes.h\""
+    guard
+      source.contains(includeDirective),
+      !headerSource.isEmpty
+    else {
+      return source
+    }
+    let replacement =
+      "// Embedded GEMMBFloatTypes.h\n\(headerSource)\n// End embedded header"
+    return source.replacingOccurrences(of: includeDirective, with: replacement)
+  }
+}
+
 /// Create the source code for the 'metal\_simdgroup\_event' header.
 ///
 /// I may have found the hardware bug with async copies on M1. If you shoot
@@ -557,6 +581,8 @@ func createMetalSimdgroupMatrixStorage() -> String {
   #ifndef __METAL_SIMDGROUP_MATRIX_STORAGE
   #define __METAL_SIMDGROUP_MATRIX_STORAGE
 
+  #include "GEMMBFloatTypes.h"
+
   // The layout of threads within a SIMD matrix.
   //
   //  0  0  1  1  8  8  9  9
@@ -601,6 +627,10 @@ func createMetalSimdgroupMatrixStorage() -> String {
 
       METAL_FUNC thread vec<T, 2>* thread_elements() thread {
         return reinterpret_cast<thread vec<T, 2>*>(&t);
+      }
+
+      METAL_FUNC thread const vec<T, 2>* thread_elements() const thread {
+        return reinterpret_cast<thread const vec<T, 2>*>(&t);
       }
 
       METAL_FUNC simdgroup_matrix_storage() thread = default;

@@ -325,7 +325,7 @@ extension AttentionKernel {
       output += """
 
       float m = -numeric_limits<float>::max();
-      float l = numeric_limits<float>::denorm_min();
+      float l = numeric_limits<float>::min();
 
       """
 

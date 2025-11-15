@@ -7,7 +7,7 @@
 
 public extension GEMMKernel {
   func createSource() -> String {
-    """
+    let source = """
 
     \(createMetalSimdgroupEvent())
     \(createMetalSimdgroupMatrixStorage())
@@ -80,6 +80,7 @@ public extension GEMMKernel {
     }
 
     """
+    return GEMMBFloatHeaderEmbedder.embed(into: source)
   }
 }
 

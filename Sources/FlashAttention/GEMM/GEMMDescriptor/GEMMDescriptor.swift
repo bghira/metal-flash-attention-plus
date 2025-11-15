@@ -124,7 +124,7 @@ extension GEMMKernelDescriptor {
     //
     // Typical latency to initiate a Metal device, provided the function has
     // been called numerous times prior:
-    // - macOS 14
+    // - macOS 15
     //   - Swift debug mode,   Metal API validation on:  ≥33 μs
     //   - Swift release mode, Metal API validation off: ≥38 μs
     // - iOS 17
@@ -181,7 +181,7 @@ extension GEMMKernelDescriptor {
     #if os(macOS)
       // Typical latency to query IORegistry, provided the function has been
       // called numerous times prior:
-      // - macOS 14
+      // - macOS 15
       //   - Swift debug mode,   Metal API validation on:  ≥9 μs
       //   - Swift release mode, Metal API validation off: ≥9 μs
       let coreCount = findCoreCount()

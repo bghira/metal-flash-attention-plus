@@ -116,12 +116,14 @@ public extension AttentionKernel {
     """
 
     // Force write source to file for debugging
+    let patchedSource = GEMMBFloatHeaderEmbedder.embed(into: source)
+
     let sourceURL = URL(fileURLWithPath: "/tmp/quantized_attention_kernel.metal")
     do {
-      try source.write(to: sourceURL, atomically: true, encoding: .utf8)
+      try patchedSource.write(to: sourceURL, atomically: true, encoding: .utf8)
     } catch {}
 
-    return source
+    return patchedSource
   }
 }
 

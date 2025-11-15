@@ -374,7 +374,8 @@ public class MultiHeadAttention {
     }
 
     do {
-      let library = try device.makeLibrary(source: source, options: nil)
+      let patchedSource = GEMMBFloatHeaderEmbedder.embed(into: source)
+      let library = try device.makeLibrary(source: patchedSource, options: nil)
 
       let functionConstants = MTLFunctionConstantValues()
       descriptor.baseDescriptor.setFunctionConstants(functionConstants)
@@ -440,8 +441,9 @@ public class MultiHeadAttention {
     let kHeadStride = Int(kShape.sequenceLength * UInt32(kShape.headDimension))
     let vHeadStride = Int(vShape.sequenceLength * UInt32(vShape.headDimension))
 
-    // Element size in bytes (assuming FP16 for now)
-    let elementSize = 2
+    // Element size in bytes derived from descriptor precision
+    let elementSize: Int = descriptor.baseDescriptor.lowPrecisionInputs ? MemoryLayout<Float16>.stride :
+      MemoryLayout<Float>.stride
 
     return BufferOffsets(
       query: (Int(batchIndex) * qBatchStride + Int(headIndex) * qHeadStride) * elementSize,
@@ -468,8 +470,9 @@ public class MultiHeadAttention {
     let kBatchStride = Int(kShape.numHeads * kShape.sequenceLength * UInt32(kShape.headDimension))
     let vBatchStride = Int(vShape.numHeads * vShape.sequenceLength * UInt32(vShape.headDimension))
 
-    // Element size in bytes (assuming FP16 for now)
-    let elementSize = 2
+    // Element size in bytes derived from descriptor precision
+    let elementSize: Int = descriptor.baseDescriptor.lowPrecisionInputs ? MemoryLayout<Float16>.stride :
+      MemoryLayout<Float>.stride
 
     return BufferOffsets(
       query: Int(batchIndex) * qBatchStride * elementSize,

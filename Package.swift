@@ -1,4 +1,4 @@
-// swift-tools-version: 5.10
+// swift-tools-version: 6.0
 // The swift-tools-version declares the minimum version of Swift required to build this package.
 
 import PackageDescription
@@ -8,7 +8,7 @@ let package = Package(
   platforms: [
     // Add all of the operating systems that (I recall) have Metal.
     .iOS(.v17),
-    .macOS(.v14),
+    .macOS(.v15),
     .tvOS(.v17),
     .visionOS(.v1),
   ],
@@ -29,11 +29,17 @@ let package = Package(
         .copy("GEMM/GEMMQuantizedKernels.metal"),
         .copy("GEMM/GEMMRuntimeQuantization.metal"),
         .copy("GEMM/GEMMBlockwiseQuantization.metal"),
+      ],
+      swiftSettings: [
+        .enableUpcomingFeature("StrictConcurrency")
       ]
     ),
     .testTarget(
       name: "FlashAttentionTests",
-      dependencies: ["FlashAttention"]
+      dependencies: ["FlashAttention"],
+      swiftSettings: [
+        .enableUpcomingFeature("StrictConcurrency")
+      ]
     ),
   ]
 )
