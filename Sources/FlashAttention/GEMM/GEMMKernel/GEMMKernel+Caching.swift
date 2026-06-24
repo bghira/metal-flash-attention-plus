@@ -48,7 +48,7 @@ extension GEMMKernel {
         for (ushort n = 0; n < \(registerN); n += 8) {
           ushort2 origin(n, m);
           auto C = get_sram(C_sram, \(registerN), origin);
-          *C = simdgroup_matrix_storage<\(registerName("C"))>(0);
+          *(C->thread_elements()) = vec<\(registerName("C")), 2>(0);
         }
       }
     }

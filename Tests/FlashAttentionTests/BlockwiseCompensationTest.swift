@@ -7,7 +7,8 @@
 //  This test suite validates the mathematical correctness of the compensation formula
 //  used in blockwise quantized GEMM operations:
 //
-//  acc += Σ_blocks s_a[b] * s_b[b] * (Sqq[b] - z_b[b] * SqA[b] - z_a[b] * SqB[b] + cnt[b] * z_a[b] * z_b[b])
+//  acc += Σ_blocks s_a[b] * s_b[b] * (Sqq[b] - z_b[b] * SqA[b] - z_a[b] * SqB[b] + cnt[b] * z_a[b]
+//  * z_b[b])
 //
 //  Where:
 //  - s_a[b], s_b[b]: scales for block b of tensors A and B
@@ -52,13 +53,16 @@ final class BlockwiseCompensationTest: XCTestCase {
   // MARK: - Helper Methods for Manual Computation
 
   /// Manually compute the expected result for blockwise quantized GEMM
-  /// Formula: acc += Σ_blocks s_a[b] * s_b[b] * (Sqq[b] - z_b[b] * SqA[b] - z_a[b] * SqB[b] + cnt[b] * z_a[b] * z_b[b])
+  /// Formula: acc += Σ_blocks s_a[b] * s_b[b] * (Sqq[b] - z_b[b] * SqA[b] - z_a[b] * SqB[b] +
+  /// cnt[b] * z_a[b] * z_b[b])
   private func computeExpectedBlockwiseResult(
     quantizedA: [Int8], scalesA: [Float], zeroPointsA: [Int32],
     quantizedB: [Int8], scalesB: [Float], zeroPointsB: [Int32],
     matrixDim: (M: Int, N: Int, K: Int),
     blockSizeK: Int
-  ) -> [[Float]] {
+  )
+    -> [[Float]]
+  {
     let M = matrixDim.M
     let N = matrixDim.N
     let K = matrixDim.K
@@ -76,9 +80,9 @@ final class BlockwiseCompensationTest: XCTestCase {
           let blockSize = blockEnd - blockStart
 
           // Calculate block terms
-          var Sqq: Float = 0.0  // Sum of quantized A * quantized B
-          var SqA: Float = 0.0  // Sum of quantized A values
-          var SqB: Float = 0.0  // Sum of quantized B values
+          var Sqq: Float = 0.0 // Sum of quantized A * quantized B
+          var SqA: Float = 0.0 // Sum of quantized A values
+          var SqB: Float = 0.0 // Sum of quantized B values
 
           for k in blockStart..<blockEnd {
             let qA = Float(quantizedA[m * K + k])
@@ -109,7 +113,7 @@ final class BlockwiseCompensationTest: XCTestCase {
 
   /// Quantize floating-point data using specific scale and zero-point
   private func quantizeData(_ data: [Float], scale: Float, zeroPoint: Int32) -> [Int8] {
-    return data.map { value in
+    data.map { value in
       let quantized = Int32(round(value / scale)) + zeroPoint
       return Int8(clamping: quantized)
     }
@@ -137,7 +141,9 @@ final class BlockwiseCompensationTest: XCTestCase {
     quantizedB: QuantizedTensor,
     outputShape: (M: Int, N: Int),
     disableCompensation: Bool = false
-  ) -> [Float] {
+  )
+    -> [Float]
+  {
     let M = outputShape.M
     let N = outputShape.N
     let K = quantizedA.originalShape[1]
@@ -147,7 +153,7 @@ final class BlockwiseCompensationTest: XCTestCase {
     let usesBlockwiseA = quantizedA.blockSizeK != nil
     let usesBlockwiseB = quantizedB.blockSizeK != nil
 
-    if usesBlockwiseA && usesBlockwiseB && !disableCompensation {
+    if usesBlockwiseA, usesBlockwiseB, !disableCompensation {
       // Use blockwise compensation math
       let blockSizeK = quantizedA.blockSizeK!
       let numBlocks = (K + blockSizeK - 1) / blockSizeK
@@ -246,7 +252,8 @@ final class BlockwiseCompensationTest: XCTestCase {
     print("Running testTinyBlockCompensation...")
 
     // Test the mathematical correctness of the compensation formula:
-    // acc += Σ_blocks s_a[b] * s_b[b] * (Sqq[b] - z_b[b] * SqA[b] - z_a[b] * SqB[b] + cnt[b] * z_a[b] * z_b[b])
+    // acc += Σ_blocks s_a[b] * s_b[b] * (Sqq[b] - z_b[b] * SqA[b] - z_a[b] * SqB[b] + cnt[b] *
+    // z_a[b] * z_b[b])
 
     let M = 2, N = 2, K = 256
     let blockSizeK = 128
@@ -263,7 +270,7 @@ final class BlockwiseCompensationTest: XCTestCase {
     var matrixB = [Float]()
     for k in 0..<K {
       for n in 0..<N {
-        matrixB.append(Float(k + n + 1))  // Simple pattern for B
+        matrixB.append(Float(k + n + 1)) // Simple pattern for B
       }
     }
 
@@ -319,12 +326,20 @@ final class BlockwiseCompensationTest: XCTestCase {
         XCTAssertFalse(result.isNaN, "Result at (\(m), \(n)) should not be NaN")
 
         // For this specific test pattern, we expect non-zero results
-        XCTAssertNotEqual(result, 0.0, "Result at (\(m), \(n)) should not be zero with the given pattern")
+        XCTAssertNotEqual(
+          result,
+          0.0,
+          "Result at (\(m), \(n)) should not be zero with the given pattern"
+        )
       }
     }
 
     // Verify blockSizeK alignment check functionality
-    XCTAssertEqual(blockSizeK % 8, 0, "Block size should be multiple of 8 for symmetric quantization")
+    XCTAssertEqual(
+      blockSizeK % 8,
+      0,
+      "Block size should be multiple of 8 for symmetric quantization"
+    )
 
     // Test that the compensation formula handles edge cases
     let compensationTerm = Float(blockSizeK) * Float(zeroPointsA[0]) * Float(zeroPointsB[0])
@@ -352,12 +367,16 @@ final class BlockwiseCompensationTest: XCTestCase {
       floatData: Array(repeating: Float(1.0), count: K * N),
       shape: [K, N],
       precision: .INT8,
-      mode: .blockwise(blockSizeK: 64, bothOperands: true)  // Different block size
+      mode: .blockwise(blockSizeK: 64, bothOperands: true) // Different block size
     )
 
     // Verify that attempting GEMM fails with clear error
     // In a real implementation, this would check the error handling in the GEMM kernel
-    XCTAssertNotEqual(tensorA.blockSizeK, tensorB.blockSizeK, "Block sizes should be different to test mismatch")
+    XCTAssertNotEqual(
+      tensorA.blockSizeK,
+      tensorB.blockSizeK,
+      "Block sizes should be different to test mismatch"
+    )
 
     // This test validates that the infrastructure detects mismatched block sizes
     // The actual validation would happen in the GEMM dispatch code
@@ -374,16 +393,16 @@ final class BlockwiseCompensationTest: XCTestCase {
     // Use known values that make manual calculation tractable
     let scalesA: [Float] = [0.1, 0.2, 0.3, 0.4]
     let scalesB: [Float] = [0.05, 0.1, 0.15, 0.2]
-    let _: [Int32] = [0, 0, 0, 0]  // Symmetric for simplicity (zeroPointsA)
-    let _: [Int32] = [0, 0, 0, 0]  // Symmetric for simplicity (zeroPointsB)
+    let _: [Int32] = [0, 0, 0, 0] // Symmetric for simplicity (zeroPointsA)
+    let _: [Int32] = [0, 0, 0, 0] // Symmetric for simplicity (zeroPointsB)
 
     // Create simple test data
     var matrixA = [Float]()
     var matrixB = [Float]()
 
     for _ in 0..<K {
-      matrixA.append(Float(1.0))  // All 1s in A
-      matrixB.append(Float(2.0))  // All 2s in B
+      matrixA.append(Float(1.0)) // All 1s in A
+      matrixB.append(Float(2.0)) // All 2s in B
     }
 
     // Manually compute expected result
@@ -392,7 +411,7 @@ final class BlockwiseCompensationTest: XCTestCase {
       let s_a = scalesA[blockIdx]
       let s_b = scalesB[blockIdx]
       let blockElements = Float(blockSizeK)
-      let Sqq = blockElements * Float(1.0 / s_a) * Float(2.0 / s_b)  // Quantized values
+      let Sqq = blockElements * Float(1.0 / s_a) * Float(2.0 / s_b) // Quantized values
       expectedSum += s_a * s_b * Sqq
     }
 
@@ -419,7 +438,7 @@ final class BlockwiseCompensationTest: XCTestCase {
       outputShape: (M: M, N: N)
     )
 
-    let tolerance: Float = 1.0  // Larger tolerance for accumulated errors
+    let tolerance: Float = 1.0 // Larger tolerance for accumulated errors
     XCTAssertEqual(result.count, 1, "Should have exactly one result element")
     XCTAssertLessThan(
       abs(result[0] - expectedSum), tolerance,
@@ -438,7 +457,7 @@ final class BlockwiseCompensationTest: XCTestCase {
     let blockSizeK = 64
     let scalesA: [Float] = [0.1, 0.1]
     let scalesB: [Float] = [0.1, 0.1]
-    let zeroPointsA: [Int32] = [50, -50]  // Non-zero points
+    let zeroPointsA: [Int32] = [50, -50] // Non-zero points
     let zeroPointsB: [Int32] = [25, -25]
 
     // Test compensation calculation for each block
@@ -454,13 +473,25 @@ final class BlockwiseCompensationTest: XCTestCase {
       let scaledCompensationTerm = s_a * s_b * compensationTerm
 
       // Verify compensation terms are computed correctly
-      XCTAssertTrue(compensationTerm.isFinite, "Compensation term should be finite for block \(blockIdx)")
-      XCTAssertTrue(scaledCompensationTerm.isFinite, "Scaled compensation term should be finite for block \(blockIdx)")
+      XCTAssertTrue(
+        compensationTerm.isFinite,
+        "Compensation term should be finite for block \(blockIdx)"
+      )
+      XCTAssertTrue(
+        scaledCompensationTerm.isFinite,
+        "Scaled compensation term should be finite for block \(blockIdx)"
+      )
 
       // With these specific values, compensation should be non-zero
-      XCTAssertNotEqual(compensationTerm, 0.0, "Compensation term should be non-zero for block \(blockIdx)")
+      XCTAssertNotEqual(
+        compensationTerm,
+        0.0,
+        "Compensation term should be non-zero for block \(blockIdx)"
+      )
 
-      print("Block \(blockIdx): compensation = \(compensationTerm), scaled = \(scaledCompensationTerm)")
+      print(
+        "Block \(blockIdx): compensation = \(compensationTerm), scaled = \(scaledCompensationTerm)"
+      )
     }
 
     // Test edge case: when zero points are actually zero
@@ -470,8 +501,11 @@ final class BlockwiseCompensationTest: XCTestCase {
     // Test that compensation scales properly with block size
     let largerBlockCompensation = Float(128) * Float(zeroPointsA[0]) * Float(zeroPointsB[0])
     let smallerBlockCompensation = Float(32) * Float(zeroPointsA[0]) * Float(zeroPointsB[0])
-    XCTAssertEqual(largerBlockCompensation, 4 * smallerBlockCompensation,
-                   "Compensation should scale linearly with block size")
+    XCTAssertEqual(
+      largerBlockCompensation,
+      4 * smallerBlockCompensation,
+      "Compensation should scale linearly with block size"
+    )
 
     print("✓ testZeroPointCompensation passed")
   }
@@ -532,7 +566,7 @@ final class BlockwiseCompensationTest: XCTestCase {
       floatData: matrixA,
       shape: [M, K],
       precision: .INT8,
-      mode: .tensorWise  // A uses tensor-wise
+      mode: .tensorWise // A uses tensor-wise
     )
 
     let quantizedB = QuantizedTensor.from(
@@ -540,7 +574,7 @@ final class BlockwiseCompensationTest: XCTestCase {
       floatData: matrixB,
       shape: [K, N],
       precision: .INT8,
-      mode: .blockwise(blockSizeK: blockSizeK, bothOperands: false)  // B uses blockwise
+      mode: .blockwise(blockSizeK: blockSizeK, bothOperands: false) // B uses blockwise
     )
 
     let result = performQuantizedGEMM(
@@ -586,8 +620,8 @@ final class BlockwiseCompensationTest: XCTestCase {
     var matrixB = [Float]()
 
     for k in 0..<K {
-      matrixA.append(Float(k % 10))  // Cyclic pattern
-      matrixB.append(Float((k + 1) % 7))  // Different cyclic pattern
+      matrixA.append(Float(k % 10)) // Cyclic pattern
+      matrixB.append(Float((k + 1) % 7)) // Different cyclic pattern
     }
 
     // Compute reference result using high-precision arithmetic

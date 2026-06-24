@@ -49,5 +49,18 @@ public struct AttentionKernelDescriptor {
 
   public var type: AttentionKernelType?
 
+  /// Optional sparse mask metadata propagated from the base descriptor.
+  public var sparseMask: AttentionDescriptor.SparseMaskDescriptor?
+
   public init() {}
+}
+
+public extension AttentionKernelDescriptor {
+  func validateSparseConfiguration(baseThreadgroupMemory: Int) -> Bool {
+    guard let blockDimensions else { return true }
+
+    let sparseOverheadBytes = MemoryLayout<UInt32>.stride * Int(blockDimensions.parallelization)
+    let total = baseThreadgroupMemory + sparseOverheadBytes
+    return total <= 48 * 1024
+  }
 }

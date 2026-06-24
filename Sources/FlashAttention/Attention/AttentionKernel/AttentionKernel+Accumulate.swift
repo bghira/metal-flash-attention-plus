@@ -62,7 +62,7 @@ extension AttentionKernel {
       #pragma clang loop unroll(full)
       for (ushort d = 0; d < \(descriptor.registerSize); d += 8) {
         auto \(C) = \(C)_sram + (\(descriptor.registerOffset) + d) / 8;
-        *\(C) = simdgroup_matrix_storage<\(registerName(C))>(0);
+        *(\(C)->thread_elements()) = vec<\(registerName(C)), 2>(0);
       }
 
       """
@@ -386,13 +386,11 @@ extension AttentionKernel {
 
     // MARK: - Inner Loop
 
-    // Note: this codebase dequantizes INT8/INT4 operands *on load*
-    // (see load_quantized_int8/int4 in GEMMHeaders.swift), applying the
-    // per-block scale directly to each element before the FP simdgroup matmul.
-    // That makes a separate blockwise "compensation" pass (the INT8·INT8 +
-    // cross-term recovery used by integer GEMM kernels) unnecessary here, so
-    // the row-sum / compensation scaffolding that used to live below was
-    // removed rather than restored.
+    func createRowSumComputation() -> String { """
+    """ }
+
+    func createBlockwiseCompensation(descriptor _: LoopIterationDescriptor) -> String { """
+    """ }
 
     func innerLoopHead(
       descriptor: LoopIterationDescriptor
@@ -400,17 +398,14 @@ extension AttentionKernel {
       -> String
     {
       let operandName = "\(B.description.lowercased())"
-      let blockwiseSetup: String
-      if isQuantized(B) {
-        // 2D block index matching the factory layout. `bw_traversal_base`
-        // (declared in innerLoopTraversal) holds the outer traversal offset;
-        // the inner loop's `c` shadows it, so full coord = base + c.
-        //   [seq = bw_traversal_base + c, head = d_outer + d]
-        let rowExpr = transposed(B) ? "uint(d_outer) + uint(d)" :
-          "uint(bw_traversal_base) + uint(c)"
-        let colExpr = transposed(B) ? "uint(bw_traversal_base) + uint(c)" :
-          "uint(d_outer) + uint(d)"
-        blockwiseSetup = """
+      // 2D block index matching the factory layout. `bw_traversal_base`
+      // (declared in innerLoopTraversal) holds the outer traversal offset;
+      // the inner loop's `c` shadows it, so full coord = base + c.
+      //   [seq = bw_traversal_base + c, head = d_outer + d]
+      let rowExpr = transposed(B) ? "uint(d_outer) + uint(d)" : "uint(bw_traversal_base) + uint(c)"
+      let colExpr = transposed(B) ? "uint(bw_traversal_base) + uint(c)" : "uint(d_outer) + uint(d)"
+      let blockwiseSetup = if isQuantized(B) {
+        """
         float \(operandName)_tile_scale = \(operandName)_scale;
         int32_t \(operandName)_tile_zero_point = \(operandName)_zero_point;
         if (\(blockwiseConstant(B)) && BLOCK_SIZE_K > 0 && \(operandName)_block_scales != nullptr) {
@@ -424,7 +419,7 @@ extension AttentionKernel {
         }
         """
       } else {
-        blockwiseSetup = ""
+        ""
       }
 
       let loadCallString = loadCall(
@@ -465,7 +460,7 @@ extension AttentionKernel {
     {
       // Capture the outer traversal offset before the inner loop's `c`
       // shadows it, so the blockwise index can recover the full coordinate.
-      """
+      return """
 
       uint bw_traversal_base = \(traversalOffset);
       #pragma clang loop unroll(full)

@@ -57,41 +57,63 @@ public enum MultiHeadBroadcastMode {
   case custom(qShape: MultiHeadShape, kShape: MultiHeadShape, vShape: MultiHeadShape)
 
   /// Validate broadcast compatibility
-  public func isCompatible(qShape: MultiHeadShape, kShape: MultiHeadShape, vShape: MultiHeadShape) -> Bool {
+  public func isCompatible(
+    qShape: MultiHeadShape,
+    kShape: MultiHeadShape,
+    vShape: MultiHeadShape
+  )
+    -> Bool
+  {
     switch self {
     case .standard:
-      return qShape.batchSize == kShape.batchSize && kShape.batchSize == vShape.batchSize &&
-             qShape.numHeads == kShape.numHeads && kShape.numHeads == vShape.numHeads &&
-             qShape.headDimension == kShape.headDimension && kShape.headDimension == vShape.headDimension &&
-             kShape.sequenceLength == vShape.sequenceLength
+      qShape.batchSize == kShape.batchSize && kShape.batchSize == vShape.batchSize &&
+        qShape.numHeads == kShape.numHeads && kShape.numHeads == vShape.numHeads &&
+        qShape.headDimension == kShape.headDimension && kShape.headDimension == vShape
+        .headDimension &&
+        kShape.sequenceLength == vShape.sequenceLength
 
-    case .groupedQuery(let numKVHeads):
-      return qShape.batchSize == kShape.batchSize && kShape.batchSize == vShape.batchSize &&
-             kShape.numHeads == numKVHeads && vShape.numHeads == numKVHeads &&
-             qShape.numHeads % numKVHeads == 0 &&
-             qShape.headDimension == kShape.headDimension && kShape.headDimension == vShape.headDimension &&
-             kShape.sequenceLength == vShape.sequenceLength
+    case let .groupedQuery(numKVHeads):
+      qShape.batchSize == kShape.batchSize && kShape.batchSize == vShape.batchSize &&
+        kShape.numHeads == numKVHeads && vShape.numHeads == numKVHeads &&
+        qShape.numHeads % numKVHeads == 0 &&
+        qShape.headDimension == kShape.headDimension && kShape.headDimension == vShape
+        .headDimension &&
+        kShape.sequenceLength == vShape.sequenceLength
 
     case .multiQuery:
-      return qShape.batchSize == kShape.batchSize && kShape.batchSize == vShape.batchSize &&
-             kShape.numHeads == 1 && vShape.numHeads == 1 &&
-             qShape.headDimension == kShape.headDimension && kShape.headDimension == vShape.headDimension &&
-             kShape.sequenceLength == vShape.sequenceLength
+      qShape.batchSize == kShape.batchSize && kShape.batchSize == vShape.batchSize &&
+        kShape.numHeads == 1 && vShape.numHeads == 1 &&
+        qShape.headDimension == kShape.headDimension && kShape.headDimension == vShape
+        .headDimension &&
+        kShape.sequenceLength == vShape.sequenceLength
 
-    case .crossAttention(let kvSeqLen):
-      return qShape.batchSize == kShape.batchSize && kShape.batchSize == vShape.batchSize &&
-             qShape.numHeads == kShape.numHeads && kShape.numHeads == vShape.numHeads &&
-             qShape.headDimension == kShape.headDimension && kShape.headDimension == vShape.headDimension &&
-             kShape.sequenceLength == kvSeqLen && vShape.sequenceLength == kvSeqLen
+    case let .crossAttention(kvSeqLen):
+      qShape.batchSize == kShape.batchSize && kShape.batchSize == vShape.batchSize &&
+        qShape.numHeads == kShape.numHeads && kShape.numHeads == vShape.numHeads &&
+        qShape.headDimension == kShape.headDimension && kShape.headDimension == vShape
+        .headDimension &&
+        kShape.sequenceLength == kvSeqLen && vShape.sequenceLength == kvSeqLen
 
-    case .custom(let expectedQ, let expectedK, let expectedV):
-      return qShape.batchSize == expectedQ.batchSize && qShape.numHeads == expectedQ.numHeads &&
-             qShape.sequenceLength == expectedQ.sequenceLength && qShape.headDimension == expectedQ.headDimension &&
-             kShape.batchSize == expectedK.batchSize && kShape.numHeads == expectedK.numHeads &&
-             kShape.sequenceLength == expectedK.sequenceLength && kShape.headDimension == expectedK.headDimension &&
-             vShape.batchSize == expectedV.batchSize && vShape.numHeads == expectedV.numHeads &&
-             vShape.sequenceLength == expectedV.sequenceLength && vShape.headDimension == expectedV.headDimension
+    case let .custom(expectedQ, expectedK, expectedV):
+      qShape.batchSize == expectedQ.batchSize && qShape.numHeads == expectedQ.numHeads &&
+        qShape.sequenceLength == expectedQ.sequenceLength && qShape.headDimension == expectedQ
+        .headDimension &&
+        kShape.batchSize == expectedK.batchSize && kShape.numHeads == expectedK.numHeads &&
+        kShape.sequenceLength == expectedK.sequenceLength && kShape.headDimension == expectedK
+        .headDimension &&
+        vShape.batchSize == expectedV.batchSize && vShape.numHeads == expectedV.numHeads &&
+        vShape.sequenceLength == expectedV.sequenceLength && vShape.headDimension == expectedV
+        .headDimension
     }
+  }
+}
+
+public extension MultiHeadBroadcastMode {
+  var isMultiQuery: Bool {
+    if case .multiQuery = self {
+      return true
+    }
+    return false
   }
 }
 
@@ -112,9 +134,11 @@ public enum MultiHeadDispatchStrategy {
   /// Determine optimal strategy based on shapes and hardware
   public static func optimal(
     qShape: MultiHeadShape,
-    broadcastMode: MultiHeadBroadcastMode,
-    device: MTLDevice
-  ) -> MultiHeadDispatchStrategy {
+    broadcastMode _: MultiHeadBroadcastMode,
+    device _: MTLDevice
+  )
+    -> MultiHeadDispatchStrategy
+  {
     let totalHeads = qShape.batchSize * qShape.numHeads
     // Use a reasonable estimate for max concurrent threadgroups
     let maxConcurrentThreadgroups = 32 // Conservative estimate for most devices
@@ -181,13 +205,21 @@ public struct MultiHeadAttentionDescriptor {
     self.quantizationParameters = quantizationParameters
 
     // Validate broadcast compatibility
-    guard broadcastMode.isCompatible(qShape: queryShape, kShape: keyShape, vShape: valueShape) else {
+    guard broadcastMode.isCompatible(qShape: queryShape, kShape: keyShape, vShape: valueShape)
+    else {
       fatalError("Incompatible tensor shapes for broadcast mode \(broadcastMode)")
     }
   }
 
   /// Create legacy single-head descriptor for compatibility
-  public func legacyDescriptor(batchIndex: UInt32, headIndex: UInt32) -> AttentionDescriptor {
+  public func legacyDescriptor(
+    batchIndex _: UInt32,
+    headIndex _: UInt32,
+    kvHeadIndex overrideKVHeadIndex: UInt32? = nil
+  )
+    -> AttentionDescriptor
+  {
+    _ = overrideKVHeadIndex
     var descriptor = baseDescriptor
 
     // Set matrix dimensions for single head
@@ -200,6 +232,12 @@ public struct MultiHeadAttentionDescriptor {
       column: kvSeqLen,
       head: headDim
     )
+
+    if var sparseMask = descriptor.sparseMask {
+      sparseMask.isMQA = broadcastMode.isMultiQuery
+      sparseMask.numKVHeads = keyShape.numHeads
+      descriptor.sparseMask = sparseMask
+    }
 
     return descriptor
   }
@@ -241,7 +279,7 @@ public struct MultiHeadAttentionDescriptor {
 /// Multi-head attention operand extensions
 public extension AttentionOperand {
   /// Buffer binding index accounting for multi-head layout
-  func multiHeadBufferBinding(headIndex: UInt32) -> UInt8? {
+  func multiHeadBufferBinding(headIndex _: UInt32) -> UInt8? {
     guard let baseBinding = bufferBinding else { return nil }
     // For now, use same bindings as single-head
     // Future: could implement head-specific bindings

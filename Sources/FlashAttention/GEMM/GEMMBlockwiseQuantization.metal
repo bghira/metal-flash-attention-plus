@@ -8,6 +8,7 @@
 
 #include <metal_stdlib>
 #include <metal_simdgroup>
+#include "GEMMBFloatTypes.h"
 using namespace metal;
 
 namespace blockwise_quantization {

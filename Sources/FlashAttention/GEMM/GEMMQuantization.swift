@@ -4,7 +4,24 @@
 //
 //
 
-import Metal
+@preconcurrency import Metal
+
+private enum QuantizedTensorCoding {
+  static let deviceKey: CodingUserInfoKey = {
+    guard let key = CodingUserInfoKey(rawValue: "MFAQuantizedTensorDevice") else {
+      fatalError("Failed to create coding key for quantized tensor device.")
+    }
+    return key
+  }()
+
+  final class DeviceBox: @unchecked Sendable {
+    let device: MTLDevice
+
+    init(device: MTLDevice) {
+      self.device = device
+    }
+  }
+}
 
 /// Quantization mode specifying the granularity of quantization
 public enum QuantizationMode: Codable {
@@ -542,14 +559,11 @@ public extension GEMMOperandPrecision {
 
   /// Per-block (2D blockSize×blockSize) quantization.
   ///
-  /// Block layout: the tensor is treated as 2D `[shape[0], shape[1]]` (row-major)
-  /// and tiled into `blockSize × blockSize` blocks. `scales` / `zeroPoints` are
-  /// flattened in row-major block order:
-  ///
-  ///   blockIndex(r, c) = (r / blockSize) * numBlocksCol + (c / blockSize)
-  ///
-  /// where `numBlocksCol = ceil(cols / blockSize)`. This must stay in sync with
-  /// the index computed inside the Metal kernel's dequantizing load.
+  /// The tensor is treated as 2D `[shape[0], shape[1]]` (row-major) and tiled
+  /// into blockSize × blockSize blocks. `scales`/`zeroPoints` are flattened in
+  /// row-major block order: blockIndex(r, c) = (r / blockSize) * numBlocksCol
+  /// + (c / blockSize), numBlocksCol = ceil(cols / blockSize). This must stay
+  /// in sync with the index computed inside the Metal kernel's dequantizing load.
   func quantizeBlockwise(
     input: UnsafePointer<Float>,
     output: UnsafeMutableRawPointer,
@@ -576,9 +590,7 @@ public extension GEMMOperandPrecision {
         let r = i / cols
         let c = i % cols
         let idx = blockIndex(r, c)
-        let scale = scales[idx]
-        let zp = zeroPoints[idx]
-        let q = Int32(round(input[i] / scale)) + zp
+        let q = Int32(round(input[i] / scales[idx])) + zeroPoints[idx]
         out[i] = Int8(clamping: q)
       }
 
@@ -590,7 +602,6 @@ public extension GEMMOperandPrecision {
         let s0 = scales[blockIndex(r0, c0)]
         let z0 = zeroPoints[blockIndex(r0, c0)]
         let val1 = Int32(round(input[i] / s0)) + z0
-
         let packed1 = UInt8(max(0, min(15, val1 + 8)))
         var byte = packed1
 
@@ -601,8 +612,7 @@ public extension GEMMOperandPrecision {
           let s1 = scales[blockIndex(r1, c1)]
           let z1 = zeroPoints[blockIndex(r1, c1)]
           let val2 = Int32(round(input[next] / s1)) + z1
-          let packed2 = UInt8(max(0, min(15, val2 + 8)))
-          byte |= (packed2 << 4)
+          byte |= (UInt8(max(0, min(15, val2 + 8))) << 4)
         }
         out[i / 2] = byte
       }
@@ -747,7 +757,7 @@ public class QuantizedTensor: Codable {
       bufferSize = precision == .INT4 ? (elementCount + 1) / 2 : elementCount * precision.size
 
       // Extract blockSizeK from mode if it's blockwise, and reconstruct the
-      // flat per-block scale / zero-point arrays that the kernel will consume.
+      // flat per-block scale / zero-point arrays the kernel will consume.
       if case let .blockwise(blockSize, _) = mode {
         finalBlockSizeK = blockSize
         blockScalesArray = [parameters.scale] + (parameters.additionalScales ?? [])
@@ -849,26 +859,23 @@ public class QuantizedTensor: Codable {
     )
   }
 
-  /// Convert quantized tensor back to floating point.
+  /// Convert quantized tensor back to floating point
   /// - Returns: Array of floating point values
   public func toFloats() -> [Float] {
     var result = [Float](repeating: 0, count: elementCount)
 
     // Use the per-block path when the tensor carries block scales so the
     // round-trip matches how the kernel will dequantize.
-    if
-      let bs = blockSizeK, let scalesBuf = blockScales, let zpBuf = blockZeroPoints,
-      case .blockwise = parameters.mode
+    if let bs = blockSizeK, let scalesBuf = blockScales, let zpBuf = blockZeroPoints,
+       case .blockwise = parameters.mode
     {
       let numBlocks = scalesBuf.length / MemoryLayout<Float>.size
       let scales = Array(UnsafeBufferPointer(
         start: scalesBuf.contents().bindMemory(to: Float.self, capacity: numBlocks),
-        count: numBlocks
-      ))
+        count: numBlocks))
       let zps = Array(UnsafeBufferPointer(
         start: zpBuf.contents().bindMemory(to: Int32.self, capacity: numBlocks),
-        count: numBlocks
-      ))
+        count: numBlocks))
       result.withUnsafeMutableBufferPointer { floatPtr in
         parameters.precision.dequantizeBlockwise(
           input: data.contents(),
@@ -1002,10 +1009,13 @@ public class QuantizedTensor: Codable {
     originalShape = header.shape
     blockSizeK = header.blockSizeK
 
-    // We need a device to create buffers - this is a limitation of the Codable approach
-    // In practice, you would need to provide the device through a separate method
-    // For now, we'll assume MTLCreateSystemDefaultDevice() is available
-    guard let device = MTLCreateSystemDefaultDevice() else {
+    // Retrieve the device that will own the decoded buffers.
+    let device: MTLDevice
+    if let box = decoder.userInfo[QuantizedTensorCoding.deviceKey] as? QuantizedTensorCoding.DeviceBox {
+      device = box.device
+    } else if let defaultDevice = MTLCreateSystemDefaultDevice() {
+      device = defaultDevice
+    } else {
       throw DecodingError.dataCorrupted(
         DecodingError.Context(
           codingPath: decoder.codingPath,
@@ -1053,36 +1063,8 @@ public class QuantizedTensor: Codable {
   public static func decode(from data: Data, device: MTLDevice) throws -> QuantizedTensor {
     let decoder = JSONDecoder()
 
-    // Create a custom decoder that can access the device
-    class DeviceAwareDecoder: Decoder {
-      let device: MTLDevice
-      let baseDecoder: Decoder
-
-      init(device: MTLDevice, baseDecoder: Decoder) {
-        self.device = device
-        self.baseDecoder = baseDecoder
-      }
-
-      var codingPath: [CodingKey] { baseDecoder.codingPath }
-      var userInfo: [CodingUserInfoKey: Any] { baseDecoder.userInfo }
-
-      func container<Key>(keyedBy type: Key.Type) throws -> KeyedDecodingContainer<Key>
-        where Key: CodingKey
-      {
-        try baseDecoder.container(keyedBy: type)
-      }
-
-      func unkeyedContainer() throws -> UnkeyedDecodingContainer {
-        try baseDecoder.unkeyedContainer()
-      }
-
-      func singleValueContainer() throws -> SingleValueDecodingContainer {
-        try baseDecoder.singleValueContainer()
-      }
-    }
-
     // Store device in userInfo for access during decoding
-    decoder.userInfo[CodingUserInfoKey(rawValue: "MTLDevice")!] = device
+    decoder.userInfo[QuantizedTensorCoding.deviceKey] = QuantizedTensorCoding.DeviceBox(device: device)
 
     return try decoder.decode(QuantizedTensor.self, from: data)
   }

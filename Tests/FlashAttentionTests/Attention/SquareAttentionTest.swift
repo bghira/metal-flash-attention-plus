@@ -748,6 +748,12 @@ private func profileProblemSize(
           pipeline: pipelineBackwardKeyValue,
           along: sequenceDimension
         )
+      case .mlaCompressed:
+        dispatch(
+          kernel: kernelForward,
+          pipeline: pipelineForward,
+          along: sequenceDimension
+        )
       }
     }
 
@@ -780,6 +786,8 @@ private func profileProblemSize(
       3 * headDimension + 5
     case .backwardKeyValue:
       4 * headDimension + 5
+    case .mlaCompressed:
+      2 * headDimension + 5 // Similar to forward pass
     }
     operations *= (sequenceDimension * sequenceDimension)
     operations *= dispatchCount

@@ -46,29 +46,38 @@ public class MultiHeadAttention {
       return nil
     }
 
-    switch descriptor.dispatchStrategy {
+    var resolvedDescriptor = descriptor
+    if var sparseMask = resolvedDescriptor.baseDescriptor.sparseMask {
+      sparseMask.isMQA = resolvedDescriptor.broadcastMode.isMultiQuery
+      sparseMask.numKVHeads = resolvedDescriptor.keyShape.numHeads
+      resolvedDescriptor.baseDescriptor.sparseMask = sparseMask
+    }
+
+    let resolvedMaskBuffer = maskBuffer ?? resolvedDescriptor.baseDescriptor.sparseMask?.maskBuffer
+
+    switch resolvedDescriptor.dispatchStrategy {
     case .perBatchHead:
       return dispatchPerBatchHead(
         commandBuffer: commandBuffer,
         query: query, key: key, value: value, output: output,
-        logsumexp: logsumexp, descriptor: descriptor,
-        maskBuffer: maskBuffer
+        logsumexp: logsumexp, descriptor: resolvedDescriptor,
+        maskBuffer: resolvedMaskBuffer
       )
 
     case .perBatch:
       return dispatchPerBatch(
         commandBuffer: commandBuffer,
         query: query, key: key, value: value, output: output,
-        logsumexp: logsumexp, descriptor: descriptor,
-        maskBuffer: maskBuffer
+        logsumexp: logsumexp, descriptor: resolvedDescriptor,
+        maskBuffer: resolvedMaskBuffer
       )
 
     case .batched, .auto:
       return dispatchBatched(
         commandBuffer: commandBuffer,
         query: query, key: key, value: value, output: output,
-        logsumexp: logsumexp, descriptor: descriptor,
-        maskBuffer: maskBuffer
+        logsumexp: logsumexp, descriptor: resolvedDescriptor,
+        maskBuffer: resolvedMaskBuffer
       )
     }
   }
@@ -365,7 +374,8 @@ public class MultiHeadAttention {
     }
 
     do {
-      let library = try device.makeLibrary(source: source, options: nil)
+      let patchedSource = GEMMBFloatHeaderEmbedder.embed(into: source)
+      let library = try device.makeLibrary(source: patchedSource, options: nil)
 
       let functionConstants = MTLFunctionConstantValues()
       descriptor.baseDescriptor.setFunctionConstants(functionConstants)
@@ -431,8 +441,9 @@ public class MultiHeadAttention {
     let kHeadStride = Int(kShape.sequenceLength * UInt32(kShape.headDimension))
     let vHeadStride = Int(vShape.sequenceLength * UInt32(vShape.headDimension))
 
-    // Element size in bytes (assuming FP16 for now)
-    let elementSize = 2
+    // Element size in bytes derived from descriptor precision
+    let elementSize: Int = descriptor.baseDescriptor.lowPrecisionInputs ? MemoryLayout<Float16>.stride :
+      MemoryLayout<Float>.stride
 
     return BufferOffsets(
       query: (Int(batchIndex) * qBatchStride + Int(headIndex) * qHeadStride) * elementSize,
@@ -459,8 +470,9 @@ public class MultiHeadAttention {
     let kBatchStride = Int(kShape.numHeads * kShape.sequenceLength * UInt32(kShape.headDimension))
     let vBatchStride = Int(vShape.numHeads * vShape.sequenceLength * UInt32(vShape.headDimension))
 
-    // Element size in bytes (assuming FP16 for now)
-    let elementSize = 2
+    // Element size in bytes derived from descriptor precision
+    let elementSize: Int = descriptor.baseDescriptor.lowPrecisionInputs ? MemoryLayout<Float16>.stride :
+      MemoryLayout<Float>.stride
 
     return BufferOffsets(
       query: Int(batchIndex) * qBatchStride * elementSize,

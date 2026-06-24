@@ -164,7 +164,8 @@ public extension AttentionDescriptor {
       registerPrecisions[.K] = .FP16
       registerPrecisions[.V] = .FP16
       // Always use FP32 for BF16 dO register precision to prevent accumulation NaNs
-      registerPrecisions[.dO] = (hasNativeBF16Casting && !forceFP32AccumulationForBF16) ? .BF16 : .FP32
+      registerPrecisions[.dO] = (hasNativeBF16Casting && !forceFP32AccumulationForBF16) ? .BF16 :
+        .FP32
     } else {
       registerPrecisions[.Q] = .FP32
       registerPrecisions[.K] = .FP32
@@ -176,7 +177,8 @@ public extension AttentionDescriptor {
     if lowPrecisionIntermediates {
       registerPrecisions[.L] = .FP16
       // Always use FP32 for BF16 D register precision to prevent accumulation NaNs
-      registerPrecisions[.D] = (hasNativeBF16Casting && !forceFP32AccumulationForBF16) ? .BF16 : .FP32
+      registerPrecisions[.D] = (hasNativeBF16Casting && !forceFP32AccumulationForBF16) ? .BF16 :
+        .FP32
     } else {
       registerPrecisions[.L] = .FP32
       registerPrecisions[.D] = .FP32
@@ -204,7 +206,8 @@ public extension AttentionDescriptor {
       registerPrecisions[.P] = .FP16
       registerPrecisions[.dP] = .FP32
       // Always use FP32 for BF16 dS register precision to prevent accumulation NaNs
-      registerPrecisions[.dS] = (hasNativeBF16Casting && !forceFP32AccumulationForBF16) ? .BF16 : .FP32
+      registerPrecisions[.dS] = (hasNativeBF16Casting && !forceFP32AccumulationForBF16) ? .BF16 :
+        .FP32
     } else {
       registerPrecisions[.S] = .FP32
       registerPrecisions[.P] = .FP32

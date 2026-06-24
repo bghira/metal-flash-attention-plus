@@ -19,6 +19,8 @@ public extension AttentionKernel {
         loopBackwardQuery()
       case .backwardKeyValue:
         loopBackwardKeyValue()
+      case .mlaCompressed:
+        "" // MLA uses a separate kernel, not this template
       }
     }
 
@@ -96,11 +98,7 @@ public extension AttentionKernel {
           kv_batch_head_offset = (batch_id * num_kv_heads + kv_head_id) * sequence_length * head_dimension;
         }
 
-        if (O_strides != nullptr) {
-          o_batch_head_offset = batch_id * O_strides[0] + head_id * O_strides[2];
-        } else {
-          o_batch_head_offset = q_batch_head_offset;  // Output has same shape as query
-        }
+        o_batch_head_offset = q_batch_head_offset;  // Output has same shape as query
 
         // Apply offsets to buffer pointers based on kernel type
         // Only apply offsets if we have multiple heads or batches
@@ -118,12 +116,14 @@ public extension AttentionKernel {
     """
 
     // Force write source to file for debugging
+    let patchedSource = GEMMBFloatHeaderEmbedder.embed(into: source)
+
     let sourceURL = URL(fileURLWithPath: "/tmp/quantized_attention_kernel.metal")
     do {
-      try source.write(to: sourceURL, atomically: true, encoding: .utf8)
+      try patchedSource.write(to: sourceURL, atomically: true, encoding: .utf8)
     } catch {}
 
-    return source
+    return patchedSource
   }
 }
 
@@ -151,6 +151,9 @@ extension AttentionKernel {
       L = L + (batch_id * num_heads + head_id) * sequence_length;
       D = D + (batch_id * num_heads + head_id) * sequence_length;
       """
+    case .mlaCompressed:
+      // MLA uses a separate kernel implementation
+      ""
     case .backwardKeyValue:
       """
       Q = Q + q_batch_head_offset;
@@ -184,6 +187,12 @@ extension AttentionKernel {
     constant bool HAS_BLOCKWISE_V [[function_constant(7)]];
     constant uint BLOCK_SIZE_K [[function_constant(8)]];
 
+    // Sparse masking and broadcast metadata
+    constant bool HAS_SPARSE_RANGES [[function_constant(9)]];
+    constant bool HAS_BLOCK_SPARSE [[function_constant(10)]];
+    constant bool IS_MQA_MODE [[function_constant(11)]];
+    constant uint NUM_KV_HEADS [[function_constant(12)]];
+
     """
   }
 
@@ -206,6 +215,10 @@ extension AttentionKernel {
       operands += [.Q, .K, .V]
       operands += [.dO, .dV, .dK]
       operands += [.L, .D]
+    case .mlaCompressed:
+      // MLA has different operands: Q, KV_latent, W_decompress_k, W_decompress_v, O
+      // For compatibility, use standard operands
+      operands += [.Q, .O]
     }
     operands.sort {
       $0.bufferBinding! < $1.bufferBinding!
@@ -225,10 +238,10 @@ extension AttentionKernel {
     }
 
     // Second pass: per-tensor quantization parameters for quantized operands.
-    // Only scale and zero_point are consumed by the dequantizing load path
-    // (see AttentionKernel+Accumulate.swift). strategy / strategy_version are
-    // kept on the Swift QuantizationParameters struct only — emitting them as
-    // Metal buffers wastes scarce buffer slots (Metal caps at index 30).
+    // Only scale and zero_point are consumed by the dequantizing load path.
+    // strategy / strategy_version are kept on the Swift QuantizationParameters
+    // struct only — emitting them as Metal buffers wastes scarce buffer slots
+    // (Metal caps at index 30) and overflows INT8 backward kernels.
     for operand in operands where isQuantized(operand) {
       let operandName = "\(operand)".lowercased()
 
@@ -240,17 +253,16 @@ extension AttentionKernel {
       currentBufferIndex += 1
     }
 
-    // Third pass: blockwise quantization parameters for quantized operands.
-    // block_scales / block_zero_points are consumed by the inner loop's
-    // per-block scale lookup. precomputed_sums has no live consumer and is
-    // omitted to conserve buffer slots.
+    // Third pass: blockwise quantization parameters for quantized operands
     for operand in operands where isQuantized(operand) {
       let operandName = "\(operand)".lowercased()
 
+      // Block scales buffer (for per-block quantization)
       output +=
         "  device const float* \(operandName)_block_scales [[buffer(\(currentBufferIndex))]], \n"
       currentBufferIndex += 1
 
+      // Block zero points buffer (for per-block quantization)
       output +=
         "  device const int32_t* \(operandName)_block_zero_points [[buffer(\(currentBufferIndex))]], \n"
       currentBufferIndex += 1
@@ -258,14 +270,9 @@ extension AttentionKernel {
 
     // Fourth pass: stride information for handling non-contiguous tensors
     // Add stride buffers for Q, K, V, O tensors to support PyTorch non-contiguous layouts
-    let stridedOperands = [
-      AttentionOperand.Q,
-      AttentionOperand.K,
-      AttentionOperand.V,
-      AttentionOperand.O,
-    ]
+    let stridedOperands = [AttentionOperand.Q, AttentionOperand.K, AttentionOperand.V]
     for operand in stridedOperands {
-      if !operands.contains(operand), operand != .O {
+      if !operands.contains(operand) {
         continue
       }
 
@@ -283,7 +290,7 @@ extension AttentionKernel {
     output += "  constant uint *sequence_length_ptr [[buffer(\(currentBufferIndex))]], \n"
     currentBufferIndex += 1
 
-    output += "  device float *mask_buffer [[buffer(\(currentBufferIndex))]], \n"
+    output += "  device char *mask_buffer_bytes [[buffer(\(currentBufferIndex))]], \n"
     currentBufferIndex += 1
 
     return output
