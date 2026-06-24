@@ -343,189 +343,7 @@ final class QuantizedAttentionTest: XCTestCase {
     XCTAssertLessThan(Float(int4Size), Float(fp32Size) * 0.15) // Less than 15% of FP32
   }
 
-  func testQuantizedBackwardPass() {
-    // Test dimensions
-    let batchSize = 1
-    let sequenceLength = 32
-    let headDim = 16
-    let totalElements = batchSize * sequenceLength * headDim
-
-    // Create test data
-    let queryData = (0..<totalElements).map { _ in Float.random(in: -1...1) }
-    let keyData = (0..<totalElements).map { _ in Float.random(in: -1...1) }
-    let valueData = (0..<totalElements).map { _ in Float.random(in: -1...1) }
-    let gradOutputData = (0..<totalElements).map { _ in Float.random(in: -0.1...0.1) }
-    let logsumexpData = (0..<sequenceLength).map { _ in Float.random(in: -5...5) }
-
-    let shape = [batchSize, sequenceLength, headDim]
-
-    // Create quantized configuration
-    var config = QuantizedAttention.Configuration()
-    config.queryPrecision = .INT8
-    config.keyPrecision = .INT8
-    config.valuePrecision = .INT8
-
-    // Create quantized tensors
-    let tensors = quantizedAttention.createQuantizedTensors(
-      queryData: queryData,
-      keyData: keyData,
-      valueData: valueData,
-      queryShape: shape,
-      keyShape: shape,
-      valueShape: shape,
-      config: config
-    )
-
-    // Create buffers for gradients and intermediate values
-    guard
-      let gradOutputBuffer = device.makeBuffer(
-        bytes: gradOutputData,
-        length: totalElements * MemoryLayout<Float>.size,
-        options: .storageModeShared
-      ),
-      let logsumexpBuffer = device.makeBuffer(
-        bytes: logsumexpData,
-        length: sequenceLength * MemoryLayout<Float>.size,
-        options: .storageModeShared
-      ),
-      let gradQueryBuffer = device.makeBuffer(
-        length: totalElements * MemoryLayout<Float>.size,
-        options: .storageModeShared
-      ),
-      let gradKeyBuffer = device.makeBuffer(
-        length: totalElements * MemoryLayout<Float>.size,
-        options: .storageModeShared
-      ),
-      let gradValueBuffer = device.makeBuffer(
-        length: totalElements * MemoryLayout<Float>.size,
-        options: .storageModeShared
-      ),
-      let dValuesBuffer = device.makeBuffer(
-        length: sequenceLength * MemoryLayout<Float>.size,
-        options: .storageModeShared
-      )
-    else {
-      XCTFail("Failed to create buffers")
-      return
-    }
-
-    // Create attention descriptor
-    var baseDescriptor = AttentionDescriptor()
-    baseDescriptor.matrixDimensions = (
-      row: UInt32(sequenceLength),
-      column: UInt32(sequenceLength),
-      head: UInt16(headDim)
-    )
-    baseDescriptor.transposeState = (Q: false, K: false, V: false, O: false)
-
-    let descriptor = QuantizedAttention.QuantizedAttentionDescriptor(
-      baseDescriptor: baseDescriptor,
-      quantizationConfig: config
-    )
-
-    // Test backward query pass
-    guard
-      let queryCommandBuffer = quantizedAttention.backwardQuery(
-        query: tensors.query,
-        key: tensors.key,
-        value: tensors.value,
-        gradOutput: gradOutputBuffer,
-        logsumexp: logsumexpBuffer,
-        gradQuery: gradQueryBuffer,
-        dValues: dValuesBuffer,
-        descriptor: descriptor
-      )
-    else {
-      XCTFail("Failed to create backward query command buffer")
-      return
-    }
-
-    queryCommandBuffer.commit()
-    queryCommandBuffer.waitUntilCompleted()
-
-    XCTAssertNil(
-      queryCommandBuffer.error,
-      "Backward query pass failed: \(queryCommandBuffer.error?.localizedDescription ?? "")"
-    )
-
-    // Test backward key-value pass
-    guard
-      let kvCommandBuffer = quantizedAttention.backwardKeyValue(
-        query: tensors.query,
-        key: tensors.key,
-        value: tensors.value,
-        gradOutput: gradOutputBuffer,
-        logsumexp: logsumexpBuffer,
-        dValues: dValuesBuffer,
-        gradKey: gradKeyBuffer,
-        gradValue: gradValueBuffer,
-        descriptor: descriptor
-      )
-    else {
-      XCTFail("Failed to create backward key-value command buffer")
-      return
-    }
-
-    kvCommandBuffer.commit()
-    kvCommandBuffer.waitUntilCompleted()
-
-    XCTAssertNil(
-      kvCommandBuffer.error,
-      "Backward key-value pass failed: \(kvCommandBuffer.error?.localizedDescription ?? "")"
-    )
-
-    let gpuGradQuery = readBuffer(gradQueryBuffer, count: totalElements)
-    let gpuGradKey = readBuffer(gradKeyBuffer, count: totalElements)
-    let gpuGradValue = readBuffer(gradValueBuffer, count: totalElements)
-
-    let queryGradNorm = l2Norm(gpuGradQuery)
-    let keyGradNorm = l2Norm(gpuGradKey)
-    let valueGradNorm = l2Norm(gpuGradValue)
-
-    print("Quantized backward pass results:")
-    print("  Query gradient norm: \(queryGradNorm)")
-    print("  Key gradient norm: \(keyGradNorm)")
-    print("  Value gradient norm: \(valueGradNorm)")
-
-    XCTAssertGreaterThan(queryGradNorm, 0.001, "Query gradients appear to be zero")
-    XCTAssertLessThan(queryGradNorm, 1000.0, "Query gradients appear too large")
-    XCTAssertGreaterThan(keyGradNorm, 0.001, "Key gradients appear to be zero")
-    XCTAssertLessThan(keyGradNorm, 1000.0, "Key gradients appear too large")
-    XCTAssertGreaterThan(valueGradNorm, 0.001, "Value gradients appear to be zero")
-    XCTAssertLessThan(valueGradNorm, 1000.0, "Value gradients appear too large")
-
-    let floatGradients = runFloatBackward(
-      query: queryData,
-      key: keyData,
-      value: valueData,
-      gradOutput: gradOutputData,
-      logsumexp: logsumexpData,
-      descriptor: baseDescriptor
-    )
-
-    let queryCosine = cosineSimilarity(gpuGradQuery, floatGradients.dQ)
-    let keyCosine = cosineSimilarity(gpuGradKey, floatGradients.dK)
-    let valueCosine = cosineSimilarity(gpuGradValue, floatGradients.dV)
-
-    let queryRelativeError = relativeError(gpuGradQuery, floatGradients.dQ)
-    let keyRelativeError = relativeError(gpuGradKey, floatGradients.dK)
-    let valueRelativeError = relativeError(gpuGradValue, floatGradients.dV)
-
-    print("Gradient comparison metrics:")
-    print("  Query cosine similarity: \(queryCosine), relative error: \(queryRelativeError)")
-    print("  Key cosine similarity: \(keyCosine), relative error: \(keyRelativeError)")
-    print("  Value cosine similarity: \(valueCosine), relative error: \(valueRelativeError)")
-
-    XCTAssertGreaterThan(queryCosine, 0.7, "Query gradient cosine similarity too low")
-    XCTAssertGreaterThan(keyCosine, 0.7, "Key gradient cosine similarity too low")
-    XCTAssertGreaterThan(valueCosine, 0.7, "Value gradient cosine similarity too low")
-
-    XCTAssertLessThan(queryRelativeError, 0.30, "Query gradient relative error too high")
-    XCTAssertLessThan(keyRelativeError, 0.30, "Key gradient relative error too high")
-    XCTAssertLessThan(valueRelativeError, 0.30, "Value gradient relative error too high")
-  }
-
-  func testKernelSourceIncludesStrategyBuffers() {
+  func testKernelSourceIncludesQuantizationBuffers() {
     var baseDescriptor = AttentionDescriptor()
     baseDescriptor.matrixDimensions = (row: 16, column: 16, head: 16)
     baseDescriptor.transposeState = (Q: false, K: false, V: false, O: false)
@@ -543,13 +361,19 @@ final class QuantizedAttentionTest: XCTestCase {
     let kernel = AttentionKernel(descriptor: kernelDescriptor)
     let source = kernel.createSource()
 
+    // The dequantizing load path consumes scale and zero_point; block_scales
+    // is emitted (null unless blockwise) for the inner loop's per-block override.
     XCTAssertTrue(
-      source.contains("constant uint &q_strategy [[buffer"),
-      "Generated kernel is missing q_strategy binding"
+      source.contains("constant float &q_scale [[buffer"),
+      "Generated kernel is missing q_scale binding"
     )
     XCTAssertTrue(
-      source.contains("constant uint &q_strategy_version [[buffer"),
-      "Generated kernel is missing q_strategy_version binding"
+      source.contains("constant int32_t &q_zero_point [[buffer"),
+      "Generated kernel is missing q_zero_point binding"
+    )
+    XCTAssertTrue(
+      source.contains("device const float* q_block_scales [[buffer"),
+      "Generated kernel is missing q_block_scales binding"
     )
   }
 
@@ -608,40 +432,369 @@ final class QuantizedAttentionTest: XCTestCase {
 
     XCTAssertEqual(tensor.parameters.strategy, .symmetric)
   }
+
+  // MARK: - Correctness gates (CPU-reference oracles)
+
+  /// Real forward correctness gate: commits the kernel and compares the output
+  /// against a CPU softmax(QKᵀ/√d)V reference computed from the original float
+  /// data. Catches dispatch/binding desyncs that "did it run?" tests miss.
+  func testQuantizedForwardCorrectness() {
+    let sequenceLength = 32
+    let headDim = 16
+    let totalElements = sequenceLength * headDim
+
+    var seed: UInt64 = 0x5EED_5EED
+    func nextRandom() -> Float {
+      seed = seed &* 6_364_136_223_846_793_005 &+ 1_442_695_040_888_963_407
+      return Float(Int32(truncatingIfNeeded: seed)) / Float(Int32.max)
+    }
+    let queryData = (0..<totalElements).map { _ in nextRandom() * 2 - 1 }
+    let keyData = (0..<totalElements).map { _ in nextRandom() * 2 - 1 }
+    let valueData = (0..<totalElements).map { _ in nextRandom() * 2 - 1 }
+
+    let reference = Self.cpuReferenceAttention(
+      query: queryData, key: keyData, value: valueData,
+      rows: sequenceLength, cols: sequenceLength, headDim: headDim
+    )
+
+    let shape = [sequenceLength, headDim]
+
+    func runForward(precision: GEMMOperandPrecision, tolerance: Float, label: String) {
+      var config = QuantizedAttention.Configuration()
+      config.queryPrecision = precision
+      config.keyPrecision = precision
+      config.valuePrecision = precision
+
+      let tensors = quantizedAttention.createQuantizedTensors(
+        queryData: queryData, keyData: keyData, valueData: valueData,
+        queryShape: shape, keyShape: shape, valueShape: shape, config: config
+      )
+
+      guard
+        let outputBuffer = device.makeBuffer(
+          length: totalElements * MemoryLayout<Float>.size, options: .storageModeShared
+        )
+      else {
+        XCTFail("Could not create output buffer")
+        return
+      }
+
+      var baseDescriptor = AttentionDescriptor()
+      baseDescriptor.matrixDimensions = (
+        row: UInt32(sequenceLength), column: UInt32(sequenceLength), head: UInt16(headDim)
+      )
+      baseDescriptor.transposeState = (Q: false, K: false, V: false, O: false)
+      let descriptor = QuantizedAttention.QuantizedAttentionDescriptor(
+        baseDescriptor: baseDescriptor, quantizationConfig: config
+      )
+
+      guard
+        let commandBuffer = quantizedAttention.forward(
+          query: tensors.query, key: tensors.key, value: tensors.value,
+          output: outputBuffer, descriptor: descriptor
+        )
+      else {
+        XCTFail("\(label) forward returned nil command buffer")
+        return
+      }
+      commandBuffer.commit()
+      commandBuffer.waitUntilCompleted()
+      XCTAssertNil(
+        commandBuffer.error,
+        "\(label) forward failed: \(commandBuffer.error?.localizedDescription ?? "")"
+      )
+
+      let gpuOutput = readBuffer(outputBuffer, count: totalElements)
+      let relErr = relativeError(gpuOutput, reference)
+      let nanCount = gpuOutput.filter { $0.isNaN || $0.isInfinite }.count
+      print("\(label) forward: relativeError=\(relErr), NaN/Inf=\(nanCount)/\(totalElements)")
+      XCTAssertEqual(nanCount, 0, "\(label) forward produced NaN/Inf output")
+      XCTAssertLessThan(
+        relErr,
+        tolerance,
+        "\(label) forward relative error too high (dispatch desync?)"
+      )
+    }
+
+    runForward(precision: .FP16, tolerance: 0.05, label: "FP16")
+    runForward(precision: .INT8, tolerance: 0.25, label: "INT8")
+  }
+
+  /// Real backward correctness gate: compares dQ/dK/dV against a proper CPU
+  /// flash-attention backward reference. The logsumexp is scaled by log2(e)
+  /// because the kernel computes softmax in log base 2 (fast::exp2).
+  func testQuantizedBackwardCorrectness() {
+    let sequenceLength = 32
+    let headDim = 16
+    let totalElements = sequenceLength * headDim
+
+    var seed: UInt64 = 0xBACC0DE
+    func nextRandom() -> Float {
+      seed = seed &* 6_364_136_223_846_793_005 &+ 1_442_695_040_888_963_407
+      return Float(Int32(truncatingIfNeeded: seed)) / Float(Int32.max)
+    }
+    let queryData = (0..<totalElements).map { _ in nextRandom() * 2 - 1 }
+    let keyData = (0..<totalElements).map { _ in nextRandom() * 2 - 1 }
+    let valueData = (0..<totalElements).map { _ in nextRandom() * 2 - 1 }
+    let gradOutputData = (0..<totalElements).map { _ in nextRandom() * 0.2 - 0.1 }
+
+    let reference = Self.cpuReferenceBackward(
+      query: queryData, key: keyData, value: valueData, gradOutput: gradOutputData,
+      rows: sequenceLength, cols: sequenceLength, headDim: headDim
+    )
+
+    let shape = [sequenceLength, headDim]
+
+    func runBackward(precision: GEMMOperandPrecision, tolerance: Float, label: String) {
+      var config = QuantizedAttention.Configuration()
+      config.queryPrecision = precision
+      config.keyPrecision = precision
+      config.valuePrecision = precision
+
+      let tensors = quantizedAttention.createQuantizedTensors(
+        queryData: queryData, keyData: keyData, valueData: valueData,
+        queryShape: shape, keyShape: shape, valueShape: shape, config: config
+      )
+
+      guard
+        let outputBuffer = device.makeBuffer(
+          bytes: reference.output,
+          length: totalElements * MemoryLayout<Float>.size, options: .storageModeShared
+        ),
+        let logsumexpBuffer = device.makeBuffer(
+          bytes: reference.logsumexp.map { $0 * 1.4426950408889634 },
+          length: sequenceLength * MemoryLayout<Float>.size, options: .storageModeShared
+        ),
+        let gradOutputBuffer = device.makeBuffer(
+          bytes: gradOutputData,
+          length: totalElements * MemoryLayout<Float>.size, options: .storageModeShared
+        ),
+        let gradQueryBuffer = device.makeBuffer(
+          length: totalElements * MemoryLayout<Float>.size, options: .storageModeShared
+        ),
+        let gradKeyBuffer = device.makeBuffer(
+          length: totalElements * MemoryLayout<Float>.size, options: .storageModeShared
+        ),
+        let gradValueBuffer = device.makeBuffer(
+          length: totalElements * MemoryLayout<Float>.size, options: .storageModeShared
+        ),
+        let dValuesBuffer = device.makeBuffer(
+          length: sequenceLength * MemoryLayout<Float>.size, options: .storageModeShared
+        )
+      else {
+        XCTFail("Failed to create buffers")
+        return
+      }
+
+      var baseDescriptor = AttentionDescriptor()
+      baseDescriptor.matrixDimensions = (
+        row: UInt32(sequenceLength), column: UInt32(sequenceLength), head: UInt16(headDim)
+      )
+      baseDescriptor.transposeState = (Q: false, K: false, V: false, O: false)
+      let descriptor = QuantizedAttention.QuantizedAttentionDescriptor(
+        baseDescriptor: baseDescriptor, quantizationConfig: config
+      )
+
+      guard
+        let queryCB = quantizedAttention.backwardQuery(
+          query: tensors.query, key: tensors.key, value: tensors.value,
+          output: outputBuffer, gradOutput: gradOutputBuffer, logsumexp: logsumexpBuffer,
+          gradQuery: gradQueryBuffer, dValues: dValuesBuffer, descriptor: descriptor
+        )
+      else {
+        XCTFail("\(label): backwardQuery returned nil")
+        return
+      }
+      queryCB.commit()
+      queryCB.waitUntilCompleted()
+      XCTAssertNil(
+        queryCB.error,
+        "\(label): backwardQuery failed: \(queryCB.error?.localizedDescription ?? "")"
+      )
+
+      guard
+        let kvCB = quantizedAttention.backwardKeyValue(
+          query: tensors.query, key: tensors.key, value: tensors.value,
+          gradOutput: gradOutputBuffer, logsumexp: logsumexpBuffer, dValues: dValuesBuffer,
+          gradKey: gradKeyBuffer, gradValue: gradValueBuffer, descriptor: descriptor
+        )
+      else {
+        XCTFail("\(label): backwardKeyValue returned nil")
+        return
+      }
+      kvCB.commit()
+      kvCB.waitUntilCompleted()
+      XCTAssertNil(
+        kvCB.error,
+        "\(label): backwardKeyValue failed: \(kvCB.error?.localizedDescription ?? "")"
+      )
+
+      let dQ = readBuffer(gradQueryBuffer, count: totalElements)
+      let dK = readBuffer(gradKeyBuffer, count: totalElements)
+      let dV = readBuffer(gradValueBuffer, count: totalElements)
+      let dQerr = relativeError(dQ, reference.dQ)
+      let dKerr = relativeError(dK, reference.dK)
+      let dVerr = relativeError(dV, reference.dV)
+      let nanCount = dQ.filter { $0.isNaN || $0.isInfinite }.count
+        + dK.filter { $0.isNaN || $0.isInfinite }.count
+        + dV.filter { $0.isNaN || $0.isInfinite }.count
+      print(
+        "\(label) backward: dQ_err=\(dQerr), dK_err=\(dKerr), dV_err=\(dVerr), NaN/Inf=\(nanCount)"
+      )
+
+      XCTAssertEqual(nanCount, 0, "\(label): backward produced NaN/Inf gradients")
+      XCTAssertLessThan(dQerr, tolerance, "\(label): dQ relative error too high")
+      XCTAssertLessThan(dKerr, tolerance, "\(label): dK relative error too high")
+      XCTAssertLessThan(dVerr, tolerance, "\(label): dV relative error too high")
+    }
+
+    runBackward(precision: .FP16, tolerance: 0.05, label: "FP16")
+    runBackward(precision: .INT8, tolerance: 0.25, label: "INT8")
+  }
+
+  /// Validates that blockwise tensors round-trip through dequantization with
+  /// per-block error bounds. Catches a factory that discards per-block scales.
+  func testBlockwiseQuantizationRoundTrip() {
+    let rows = 16
+    let cols = 32
+    let blockSize = 8
+    let totalElements = rows * cols
+
+    let data = (0..<totalElements).map { i -> Float in
+      let blockRow = (i / cols) / blockSize
+      let blockCol = (i % cols) / blockSize
+      let magnitude = Float((blockRow + 1) * (blockCol + 1))
+      return (Float(i % 7) - 3) * magnitude
+    }
+
+    let tensor = QuantizedTensor.from(
+      device: device, floatData: data, shape: [rows, cols],
+      precision: .INT8, mode: .blockwise(blockSizeK: blockSize)
+    )
+
+    XCTAssertNotNil(tensor.blockScales, "blockScales must be populated for blockwise tensors")
+    XCTAssertEqual(tensor.blockSizeK, blockSize)
+
+    let reconstructed = tensor.toFloats()
+    XCTAssertEqual(reconstructed.count, totalElements)
+
+    // Without per-block scales, blockScales is nil — the gate fails here.
+    guard let blockScalesBuf = tensor.blockScales else {
+      XCTFail("blockwise factory did not materialize blockScales")
+      return
+    }
+    let expectedNumBlocks = ((rows + blockSize - 1) / blockSize) *
+      ((cols + blockSize - 1) / blockSize)
+    let allScales = Array(UnsafeBufferPointer(
+      start: blockScalesBuf.contents().bindMemory(to: Float.self, capacity: expectedNumBlocks),
+      count: expectedNumBlocks
+    ))
+    let numBlocksCol = (cols + blockSize - 1) / blockSize
+
+    for i in 0..<totalElements {
+      let r = i / cols
+      let c = i % cols
+      let blockScale = allScales[(r / blockSize) * numBlocksCol + (c / blockSize)]
+      let error = abs(reconstructed[i] - data[i])
+      XCTAssertLessThanOrEqual(error, blockScale * 2.01, "blockwise round-trip error at \(i)")
+    }
+  }
+
+  /// End-to-end blockwise attention forward: FP16 Q with blockwise-INT8 K and V.
+  /// Uses headDim=32, blockSize=8 → a 4×4 block grid, so the 2D block indexing
+  /// in the kernel is genuinely exercised.
+  func testBlockwiseAttentionForward() {
+    let sequenceLength = 32
+    let headDim = 32
+    let blockSize = 8
+    let totalElements = sequenceLength * headDim
+
+    let queryData = (0..<totalElements).map { i -> Float in Float(i % 11) * 0.05 - 0.25 }
+    let keyData = (0..<totalElements).map { i -> Float in
+      let br = (i / headDim) / blockSize
+      let bc = (i % headDim) / blockSize
+      return (Float(i % 7) - 3) * Float((br + 1) * (bc + 1)) * 0.1
+    }
+    let valueData = (0..<totalElements).map { i -> Float in
+      let br = (i / headDim) / blockSize
+      let bc = (i % headDim) / blockSize
+      return (Float(i % 5) - 2) * Float((br + 1) * (bc + 1)) * 0.1
+    }
+
+    let reference = Self.cpuReferenceAttention(
+      query: queryData, key: keyData, value: valueData,
+      rows: sequenceLength, cols: sequenceLength, headDim: headDim
+    )
+
+    let shape = [sequenceLength, headDim]
+    let queryTensor = QuantizedTensor.from(
+      device: device, floatData: queryData, shape: shape, precision: .FP16
+    )
+    let keyTensor = QuantizedTensor.from(
+      device: device, floatData: keyData, shape: shape, precision: .INT8,
+      mode: .blockwise(blockSizeK: blockSize)
+    )
+    let valueTensor = QuantizedTensor.from(
+      device: device, floatData: valueData, shape: shape, precision: .INT8,
+      mode: .blockwise(blockSizeK: blockSize)
+    )
+    XCTAssertNotNil(keyTensor.blockScales)
+    XCTAssertNotNil(valueTensor.blockScales)
+
+    guard
+      let outputBuffer = device.makeBuffer(
+        length: totalElements * MemoryLayout<Float>.size, options: .storageModeShared
+      )
+    else { XCTFail("Could not create output buffer")
+      return
+    }
+
+    var baseDescriptor = AttentionDescriptor()
+    baseDescriptor.matrixDimensions = (
+      row: UInt32(sequenceLength), column: UInt32(sequenceLength), head: UInt16(headDim)
+    )
+    baseDescriptor.transposeState = (Q: false, K: false, V: false, O: false)
+    var config = QuantizedAttention.Configuration()
+    config.queryPrecision = .FP16
+    config.keyPrecision = .INT8
+    config.valuePrecision = .INT8
+    let descriptor = QuantizedAttention.QuantizedAttentionDescriptor(
+      baseDescriptor: baseDescriptor, quantizationConfig: config
+    )
+
+    guard
+      let commandBuffer = quantizedAttention.forward(
+        query: queryTensor, key: keyTensor, value: valueTensor,
+        output: outputBuffer, descriptor: descriptor
+      )
+    else { XCTFail("Blockwise forward returned nil")
+      return
+    }
+    commandBuffer.commit()
+    commandBuffer.waitUntilCompleted()
+    XCTAssertNil(
+      commandBuffer.error,
+      "Blockwise forward failed: \(commandBuffer.error?.localizedDescription ?? "")"
+    )
+
+    let gpuOutput = readBuffer(outputBuffer, count: totalElements)
+    let relErr = relativeError(gpuOutput, reference)
+    let nanCount = gpuOutput.filter { $0.isNaN || $0.isInfinite }.count
+    print("Blockwise FP16-Q/INT8-K,V forward: relativeError=\(relErr), NaN/Inf=\(nanCount)")
+
+    XCTAssertEqual(nanCount, 0, "Blockwise forward produced NaN/Inf output")
+    XCTAssertLessThan(
+      relErr,
+      0.15,
+      "Blockwise forward relative error too high (2D block indexing wrong?)"
+    )
+  }
 }
 
 private extension QuantizedAttentionTest {
   func readBuffer(_ buffer: MTLBuffer, count: Int) -> [Float] {
     let pointer = buffer.contents().bindMemory(to: Float.self, capacity: count)
     return (0..<count).map { pointer[$0] }
-  }
-
-  func l2Norm(_ values: [Float]) -> Float {
-    var sum: Double = 0
-    for value in values {
-      sum += Double(value) * Double(value)
-    }
-    return Float(sqrt(sum))
-  }
-
-  func cosineSimilarity(_ lhs: [Float], _ rhs: [Float]) -> Float {
-    precondition(lhs.count == rhs.count)
-
-    var dot: Double = 0
-    var lhsNorm: Double = 0
-    var rhsNorm: Double = 0
-
-    for index in 0..<lhs.count {
-      let left = Double(lhs[index])
-      let right = Double(rhs[index])
-      dot += left * right
-      lhsNorm += left * left
-      rhsNorm += right * right
-    }
-
-    let denominator = sqrt(lhsNorm) * sqrt(rhsNorm)
-    guard denominator > 1e-8 else { return 0 }
-    return Float(dot / denominator)
   }
 
   func relativeError(_ candidate: [Float], _ reference: [Float]) -> Float {
@@ -662,120 +815,123 @@ private extension QuantizedAttentionTest {
     return Float(numerator / denominator)
   }
 
-  func runFloatBackward(
-    query: [Float],
-    key: [Float],
-    value: [Float],
-    gradOutput: [Float],
-    logsumexp: [Float],
-    descriptor: AttentionDescriptor
+  // MARK: - CPU Reference Oracles
+
+  /// Naive CPU reference: O = softmax(Q·Kᵀ / √d) · V, in Float.
+  /// Layout is row-major [seq, headDim] for Q/K/V/O.
+  static func cpuReferenceAttention(
+    query: [Float], key: [Float], value: [Float],
+    rows: Int, cols: Int, headDim: Int
   )
-    -> (dQ: [Float], dK: [Float], dV: [Float])
+    -> [Float]
   {
-    guard let dims = descriptor.matrixDimensions else {
-      return (
-        dQ: Array(repeating: 0, count: query.count),
-        dK: Array(repeating: 0, count: key.count),
-        dV: Array(repeating: 0, count: value.count)
-      )
+    precondition(query.count == rows * headDim)
+    precondition(key.count == cols * headDim)
+    precondition(value.count == cols * headDim)
+
+    let scale = 1 / Float(Float(headDim).squareRoot())
+    var output = [Float](repeating: 0, count: rows * headDim)
+
+    for i in 0..<rows {
+      var maxScore = -Float.greatestFiniteMagnitude
+      var scores = [Float](repeating: 0, count: cols)
+      for j in 0..<cols {
+        var dot: Float = 0
+        for d in 0..<headDim {
+          dot += query[i * headDim + d] * key[j * headDim + d]
+        }
+        scores[j] = dot * scale
+        if scores[j] > maxScore { maxScore = scores[j] }
+      }
+      var sumExp: Float = 0
+      for j in 0..<cols {
+        scores[j] = Foundation.exp(scores[j] - maxScore)
+        sumExp += scores[j]
+      }
+      for d in 0..<headDim {
+        var acc: Float = 0
+        for j in 0..<cols {
+          acc += (scores[j] / sumExp) * value[j * headDim + d]
+        }
+        output[i * headDim + d] = acc
+      }
     }
+    return output
+  }
 
-    let M = Int(dims.row)
-    let N = Int(dims.column)
-    let KDim = Int(dims.head)
+  /// CPU flash-attention backward reference, matching the kernel's math:
+  ///   S = Q·Kᵀ·scale,  P = softmax(S),  O = P·V,  L = logsumexp(S)
+  ///   D_i = row_d( dO ⊙ O )
+  ///   dP = dO·Vᵀ ,  dS = P ⊙ (dP − D) · scale   (= dL/d(QKᵀ))
+  ///   dQ = dS·K ,  dK = dSᵀ·Q ,  dV = Pᵀ·dO
+  static func cpuReferenceBackward(
+    query: [Float], key: [Float], value: [Float], gradOutput: [Float],
+    rows: Int, cols: Int, headDim: Int
+  )
+    -> (logsumexp: [Float], output: [Float], dQ: [Float], dK: [Float], dV: [Float])
+  {
+    precondition(query.count == rows * headDim)
+    precondition(key.count == cols * headDim)
+    precondition(value.count == cols * headDim)
+    precondition(gradOutput.count == rows * headDim)
 
-    precondition(query.count == M * KDim)
-    precondition(key.count == N * KDim)
-    precondition(value.count == N * KDim)
-    precondition(gradOutput.count == M * KDim)
-    precondition(logsumexp.count >= M)
+    let scale = 1 / Float(Float(headDim).squareRoot())
+    var logsumexp = [Float](repeating: 0, count: rows)
+    var output = [Float](repeating: 0, count: rows * headDim)
+    var probabilities = [[Float]](repeating: [Float](repeating: 0, count: cols), count: rows)
 
-    let steClipRange: Float = 6.0
-
-    var dQ = [Float](repeating: 0, count: M * KDim)
-    var dK = [Float](repeating: 0, count: N * KDim)
-    var dV = [Float](repeating: 0, count: N * KDim)
-
-    for row in 0..<M {
-      for col in 0..<KDim {
-        let qValue = query[row * KDim + col]
-        let absQ = abs(qValue)
-        var clipFactor: Float = 1.0
-        if absQ > steClipRange {
-          clipFactor = Swift.max(steClipRange / absQ, 0.1)
+    for i in 0..<rows {
+      var maxScore = -Float.greatestFiniteMagnitude
+      var scores = [Float](repeating: 0, count: cols)
+      for j in 0..<cols {
+        var dot: Float = 0
+        for d in 0..<headDim {
+          dot += query[i * headDim + d] * key[j * headDim + d]
         }
-
-        var dqAccumulator: Float = 0
-
-        for n in 0..<N {
-          var qkDot: Float = 0
-          for k in 0..<KDim {
-            qkDot += query[row * KDim + k] * key[n * KDim + k]
-          }
-
-          let clampedLogit = Swift.max(-10.0, Swift.min(10.0, qkDot))
-          let stableLogit = clampedLogit - logsumexp[row]
-          let pVal = Swift.max(0.0, Swift.min(1.0, Float(Foundation.exp(Double(stableLogit)))))
-
-          var gradFactor = pVal * gradOutput[row * KDim + col]
-          gradFactor *= 0.01 as Float
-
-          let kCol = key[n * KDim + col]
-          let vCol = value[n * KDim + col]
-          let combined = (0.5 as Float) * (kCol + vCol)
-
-          dqAccumulator += gradFactor * combined
+        scores[j] = dot * scale
+        if scores[j] > maxScore { maxScore = scores[j] }
+      }
+      var sumExp: Float = 0
+      for j in 0..<cols {
+        scores[j] = Foundation.exp(scores[j] - maxScore)
+        sumExp += scores[j]
+      }
+      logsumexp[i] = maxScore + Foundation.log(sumExp)
+      for j in 0..<cols {
+        probabilities[i][j] = scores[j] / sumExp
+      }
+      for d in 0..<headDim {
+        var acc: Float = 0
+        for j in 0..<cols {
+          acc += probabilities[i][j] * value[j * headDim + d]
         }
-
-        dqAccumulator = Swift.max(-10.0, Swift.min(10.0, dqAccumulator))
-        dQ[row * KDim + col] = dqAccumulator * clipFactor
+        output[i * headDim + d] = acc
       }
     }
 
-    for row in 0..<N {
-      for col in 0..<KDim {
-        let kValue = key[row * KDim + col]
-        let vValue = value[row * KDim + col]
+    var dQ = [Float](repeating: 0, count: rows * headDim)
+    var dK = [Float](repeating: 0, count: cols * headDim)
+    var dV = [Float](repeating: 0, count: cols * headDim)
 
-        var kClipFactor: Float = 1.0
-        var vClipFactor: Float = 1.0
-
-        let absK = abs(kValue)
-        if absK > steClipRange {
-          kClipFactor = Swift.max(steClipRange / absK, 0.1)
+    for i in 0..<rows {
+      var dRow: Float = 0
+      for d in 0..<headDim {
+        dRow += gradOutput[i * headDim + d] * output[i * headDim + d]
+      }
+      for j in 0..<cols {
+        var dp: Float = 0
+        for d in 0..<headDim {
+          dp += gradOutput[i * headDim + d] * value[j * headDim + d]
         }
-
-        let absV = abs(vValue)
-        if absV > steClipRange {
-          vClipFactor = Swift.max(steClipRange / absV, 0.1)
+        let dS = probabilities[i][j] * (dp - dRow) * scale
+        for d in 0..<headDim {
+          dQ[i * headDim + d] += dS * key[j * headDim + d]
+          dK[j * headDim + d] += dS * query[i * headDim + d]
+          dV[j * headDim + d] += probabilities[i][j] * gradOutput[i * headDim + d]
         }
-
-        var dkAccumulator: Float = 0
-        var dvAccumulator: Float = 0
-
-        for m in 0..<M {
-          var qkDot: Float = 0
-          for k in 0..<KDim {
-            qkDot += query[m * KDim + k] * key[row * KDim + k]
-          }
-
-          let clampedQK = Swift.max(-10.0, Swift.min(10.0, qkDot))
-          let stableLogit = clampedQK - logsumexp[m]
-          let pVal = Swift.max(0.0, Swift.min(1.0, Float(Foundation.exp(Double(stableLogit)))))
-
-          let gradComponent = pVal * gradOutput[m * KDim + col]
-          dkAccumulator += query[m * KDim + col] * gradComponent * (0.1 as Float)
-          dvAccumulator += gradComponent * (0.1 as Float)
-        }
-
-        dkAccumulator = Swift.max(-100.0, Swift.min(100.0, dkAccumulator))
-        dvAccumulator = Swift.max(-100.0, Swift.min(100.0, dvAccumulator))
-
-        dK[row * KDim + col] = dkAccumulator * kClipFactor
-        dV[row * KDim + col] = dvAccumulator * vClipFactor
       }
     }
 
-    return (dQ: dQ, dK: dK, dV: dV)
+    return (logsumexp, output, dQ, dK, dV)
   }
 }

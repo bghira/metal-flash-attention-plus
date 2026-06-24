@@ -556,6 +556,124 @@ public extension GEMMOperandPrecision {
       fatalError("Dequantization only supported for INT8 and INT4")
     }
   }
+
+  /// Per-block (2D blockSize×blockSize) quantization.
+  ///
+  /// The tensor is treated as 2D `[shape[0], shape[1]]` (row-major) and tiled
+  /// into blockSize × blockSize blocks. `scales`/`zeroPoints` are flattened in
+  /// row-major block order: blockIndex(r, c) = (r / blockSize) * numBlocksCol
+  /// + (c / blockSize), numBlocksCol = ceil(cols / blockSize). This must stay
+  /// in sync with the index computed inside the Metal kernel's dequantizing load.
+  func quantizeBlockwise(
+    input: UnsafePointer<Float>,
+    output: UnsafeMutableRawPointer,
+    count: Int,
+    shape: [Int],
+    blockSize: Int,
+    scales: [Float],
+    zeroPoints: [Int32]
+  ) {
+    guard shape.count >= 2, blockSize > 0 else {
+      fatalError("Blockwise quantization requires a 2D shape and positive block size.")
+    }
+    let cols = shape[1]
+    let numBlocksCol = (cols + blockSize - 1) / blockSize
+
+    func blockIndex(_ r: Int, _ c: Int) -> Int {
+      (r / blockSize) * numBlocksCol + (c / blockSize)
+    }
+
+    switch self {
+    case .INT8:
+      let out = output.bindMemory(to: Int8.self, capacity: count)
+      for i in 0..<count {
+        let r = i / cols
+        let c = i % cols
+        let idx = blockIndex(r, c)
+        let q = Int32(round(input[i] / scales[idx])) + zeroPoints[idx]
+        out[i] = Int8(clamping: q)
+      }
+
+    case .INT4:
+      let out = output.bindMemory(to: UInt8.self, capacity: (count + 1) / 2)
+      for i in stride(from: 0, to: count, by: 2) {
+        let r0 = i / cols
+        let c0 = i % cols
+        let s0 = scales[blockIndex(r0, c0)]
+        let z0 = zeroPoints[blockIndex(r0, c0)]
+        let val1 = Int32(round(input[i] / s0)) + z0
+        let packed1 = UInt8(max(0, min(15, val1 + 8)))
+        var byte = packed1
+
+        if i + 1 < count {
+          let next = i + 1
+          let r1 = next / cols
+          let c1 = next % cols
+          let s1 = scales[blockIndex(r1, c1)]
+          let z1 = zeroPoints[blockIndex(r1, c1)]
+          let val2 = Int32(round(input[next] / s1)) + z1
+          byte |= (UInt8(max(0, min(15, val2 + 8))) << 4)
+        }
+        out[i / 2] = byte
+      }
+
+    default:
+      fatalError("Blockwise quantization only supported for INT8 and INT4")
+    }
+  }
+
+  /// Per-block dequantization (inverse of `quantizeBlockwise`).
+  func dequantizeBlockwise(
+    input: UnsafeRawPointer,
+    output: UnsafeMutablePointer<Float>,
+    count: Int,
+    shape: [Int],
+    blockSize: Int,
+    scales: [Float],
+    zeroPoints: [Int32]
+  ) {
+    guard shape.count >= 2, blockSize > 0 else {
+      fatalError("Blockwise dequantization requires a 2D shape and positive block size.")
+    }
+    let cols = shape[1]
+    let numBlocksCol = (cols + blockSize - 1) / blockSize
+
+    func blockIndex(_ r: Int, _ c: Int) -> Int {
+      (r / blockSize) * numBlocksCol + (c / blockSize)
+    }
+
+    switch self {
+    case .INT8:
+      let inData = input.bindMemory(to: Int8.self, capacity: count)
+      for i in 0..<count {
+        let r = i / cols
+        let c = i % cols
+        let idx = blockIndex(r, c)
+        output[i] = (Float(inData[i]) - Float(zeroPoints[idx])) * scales[idx]
+      }
+
+    case .INT4:
+      let inData = input.bindMemory(to: UInt8.self, capacity: (count + 1) / 2)
+      for i in stride(from: 0, to: count, by: 2) {
+        let packed = inData[i / 2]
+        let lo = Int32(packed & 0xF) - 8
+        let r0 = i / cols
+        let c0 = i % cols
+        let idx0 = blockIndex(r0, c0)
+        output[i] = (Float(lo) - Float(zeroPoints[idx0])) * scales[idx0]
+        if i + 1 < count {
+          let hi = Int32(packed >> 4) - 8
+          let r1 = (i + 1) / cols
+          let c1 = (i + 1) % cols
+          let idx1 = blockIndex(r1, c1)
+          output[i + 1] = (Float(hi) - Float(zeroPoints[idx1])) * scales[idx1]
+        }
+      }
+
+    default:
+      fatalError("Blockwise dequantization only supported for INT8 and INT4")
+    }
+  }
 }
 
 /// Utility class for managing quantized tensor operations
@@ -617,6 +735,9 @@ public class QuantizedTensor: Codable {
     let parameters: QuantizationParameters
     let bufferSize: Int
     var finalBlockSizeK: Int?
+    // Reconstructed per-block scales / zero-points (blockwise only).
+    var blockScalesArray: [Float] = []
+    var blockZeroPointsArray: [Int32] = []
 
     if precision.requiresQuantizationParameters {
       parameters = floatData.withUnsafeBufferPointer { buffer in
@@ -635,9 +756,12 @@ public class QuantizedTensor: Codable {
       }
       bufferSize = precision == .INT4 ? (elementCount + 1) / 2 : elementCount * precision.size
 
-      // Extract blockSizeK from mode if it's blockwise
+      // Extract blockSizeK from mode if it's blockwise, and reconstruct the
+      // flat per-block scale / zero-point arrays the kernel will consume.
       if case let .blockwise(blockSize, _) = mode {
         finalBlockSizeK = blockSize
+        blockScalesArray = [parameters.scale] + (parameters.additionalScales ?? [])
+        blockZeroPointsArray = [parameters.zeroPoint] + (parameters.additionalZeroPoints ?? [])
       }
     } else {
       // For non-quantized types (FP32, FP16, BF16), create dummy parameters
@@ -657,12 +781,24 @@ public class QuantizedTensor: Codable {
 
     floatData.withUnsafeBufferPointer { floatPtr in
       if precision.requiresQuantizationParameters {
-        precision.quantize(
-          input: floatPtr.baseAddress!,
-          output: buffer.contents(),
-          count: elementCount,
-          parameters: parameters
-        )
+        if case let .blockwise(blockSize, _) = mode, !blockScalesArray.isEmpty {
+          precision.quantizeBlockwise(
+            input: floatPtr.baseAddress!,
+            output: buffer.contents(),
+            count: elementCount,
+            shape: shape,
+            blockSize: blockSize,
+            scales: blockScalesArray,
+            zeroPoints: blockZeroPointsArray
+          )
+        } else {
+          precision.quantize(
+            input: floatPtr.baseAddress!,
+            output: buffer.contents(),
+            count: elementCount,
+            parameters: parameters
+          )
+        }
       } else {
         // For non-quantized types, just copy the data in the appropriate format
         switch precision {
@@ -689,14 +825,35 @@ public class QuantizedTensor: Codable {
       }
     }
 
+    // For blockwise tensors, materialize the per-block scale / zero-point
+    // arrays into Metal buffers the kernel can read. Falls back to any
+    // caller-supplied buffers for non-blockwise modes.
+    let resolvedBlockScales: MTLBuffer?
+    let resolvedBlockZeroPoints: MTLBuffer?
+    if !blockScalesArray.isEmpty {
+      resolvedBlockScales = device.makeBuffer(
+        bytes: blockScalesArray,
+        length: blockScalesArray.count * MemoryLayout<Float>.size,
+        options: .storageModeShared
+      )
+      resolvedBlockZeroPoints = device.makeBuffer(
+        bytes: blockZeroPointsArray,
+        length: blockZeroPointsArray.count * MemoryLayout<Int32>.size,
+        options: .storageModeShared
+      )
+    } else {
+      resolvedBlockScales = blockScales
+      resolvedBlockZeroPoints = blockZeroPoints
+    }
+
     return QuantizedTensor(
       device: device,
       data: buffer,
       parameters: parameters,
       elementCount: elementCount,
       shape: shape,
-      blockScales: blockScales,
-      blockZeroPoints: blockZeroPoints,
+      blockScales: resolvedBlockScales,
+      blockZeroPoints: resolvedBlockZeroPoints,
       blockSizeK: finalBlockSizeK,
       precomputedSums: precomputedSums
     )
@@ -706,13 +863,42 @@ public class QuantizedTensor: Codable {
   /// - Returns: Array of floating point values
   public func toFloats() -> [Float] {
     var result = [Float](repeating: 0, count: elementCount)
-    result.withUnsafeMutableBufferPointer { floatPtr in
-      parameters.precision.dequantize(
-        input: data.contents(),
-        output: floatPtr.baseAddress!,
-        count: elementCount,
-        parameters: parameters
-      )
+
+    // Use the per-block path when the tensor carries block scales so the
+    // round-trip matches how the kernel will dequantize.
+    if
+      let bs = blockSizeK, let scalesBuf = blockScales, let zpBuf = blockZeroPoints,
+      case .blockwise = parameters.mode
+    {
+      let numBlocks = scalesBuf.length / MemoryLayout<Float>.size
+      let scales = Array(UnsafeBufferPointer(
+        start: scalesBuf.contents().bindMemory(to: Float.self, capacity: numBlocks),
+        count: numBlocks
+      ))
+      let zps = Array(UnsafeBufferPointer(
+        start: zpBuf.contents().bindMemory(to: Int32.self, capacity: numBlocks),
+        count: numBlocks
+      ))
+      result.withUnsafeMutableBufferPointer { floatPtr in
+        parameters.precision.dequantizeBlockwise(
+          input: data.contents(),
+          output: floatPtr.baseAddress!,
+          count: elementCount,
+          shape: originalShape,
+          blockSize: bs,
+          scales: scales,
+          zeroPoints: zps
+        )
+      }
+    } else {
+      result.withUnsafeMutableBufferPointer { floatPtr in
+        parameters.precision.dequantize(
+          input: data.contents(),
+          output: floatPtr.baseAddress!,
+          count: elementCount,
+          parameters: parameters
+        )
+      }
     }
     return result
   }
@@ -828,7 +1014,10 @@ public class QuantizedTensor: Codable {
 
     // Retrieve the device that will own the decoded buffers.
     let device: MTLDevice
-    if let box = decoder.userInfo[QuantizedTensorCoding.deviceKey] as? QuantizedTensorCoding.DeviceBox {
+    if
+      let box = decoder.userInfo[QuantizedTensorCoding.deviceKey] as? QuantizedTensorCoding
+        .DeviceBox
+    {
       device = box.device
     } else if let defaultDevice = MTLCreateSystemDefaultDevice() {
       device = defaultDevice
@@ -881,7 +1070,8 @@ public class QuantizedTensor: Codable {
     let decoder = JSONDecoder()
 
     // Store device in userInfo for access during decoding
-    decoder.userInfo[QuantizedTensorCoding.deviceKey] = QuantizedTensorCoding.DeviceBox(device: device)
+    decoder.userInfo[QuantizedTensorCoding.deviceKey] = QuantizedTensorCoding
+      .DeviceBox(device: device)
 
     return try decoder.decode(QuantizedTensor.self, from: data)
   }

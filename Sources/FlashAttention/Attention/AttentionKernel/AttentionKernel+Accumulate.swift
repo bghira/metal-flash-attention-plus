@@ -398,12 +398,22 @@ extension AttentionKernel {
       -> String
     {
       let operandName = "\(B.description.lowercased())"
+      // 2D block index matching the factory layout. `bw_traversal_base`
+      // (declared in innerLoopTraversal) holds the outer traversal offset;
+      // the inner loop's `c` shadows it, so full coord = base + c.
+      //   [seq = bw_traversal_base + c, head = d_outer + d]
+      let rowExpr = transposed(B) ? "uint(d_outer) + uint(d)" : "uint(bw_traversal_base) + uint(c)"
+      let colExpr = transposed(B) ? "uint(bw_traversal_base) + uint(c)" : "uint(d_outer) + uint(d)"
       let blockwiseSetup = if isQuantized(B) {
         """
         float \(operandName)_tile_scale = \(operandName)_scale;
         int32_t \(operandName)_tile_zero_point = \(operandName)_zero_point;
         if (\(blockwiseConstant(B)) && BLOCK_SIZE_K > 0 && \(operandName)_block_scales != nullptr) {
-          uint block_idx = uint(c) / BLOCK_SIZE_K;
+          uint \(operandName)_num_blocks_col =
+            (uint(\(leadingDimension(B))) + BLOCK_SIZE_K - 1) / BLOCK_SIZE_K;
+          uint block_idx =
+            ((\(rowExpr)) / BLOCK_SIZE_K) * \(operandName)_num_blocks_col
+            + ((\(colExpr)) / BLOCK_SIZE_K);
           \(operandName)_tile_scale = \(operandName)_block_scales[block_idx];
           \(operandName)_tile_zero_point = \(operandName)_block_zero_points[block_idx];
         }
@@ -448,8 +458,11 @@ extension AttentionKernel {
     )
       -> String
     {
+      // Capture the outer traversal offset before the inner loop's `c`
+      // shadows it, so the blockwise index can recover the full coordinate.
       """
 
+      uint bw_traversal_base = \(traversalOffset);
       #pragma clang loop unroll(full)
       for (ushort c = \(traversalStart); c < \(traversalEnd); c += 8) {
         \(innerLoopHead(descriptor: descriptor))

@@ -185,69 +185,58 @@ public class QuantizedAttention {
     let threadgroupMemoryLength = Int(kernel.threadgroupMemoryAllocation)
     encoder.setThreadgroupMemoryLength(threadgroupMemoryLength, index: 0)
 
-    // Set tensor buffers
+    // Bind buffers in the exact order produced by createBufferBindings():
+    //   Q@0 K@1 V@2 O@3 L@4
+    //   per quantized operand (Q,K,V order): scale, zero_point, strategy, strategy_version
+    //   per quantized operand: block_scales, block_zero_points
+    //   q/k/v/o strides, num_heads/num_kv_heads/head_dim/seq_len, mask  (left null → single-head)
+    // The previous dispatch started quant params at index 4 (where L belongs),
+    // set M/N/K at positions the kernel doesn't use, and dispatched a single
+    // threadgroup regardless of sequence length.
     encoder.setBuffer(query.data, offset: 0, index: 0)
     encoder.setBuffer(key.data, offset: 0, index: 1)
     encoder.setBuffer(value.data, offset: 0, index: 2)
     encoder.setBuffer(output, offset: 0, index: 3)
 
-    // Set quantization parameters
-    var bufferIndex = 4
+    let dims = descriptor.baseDescriptor.matrixDimensions!
+    let sequenceLength = UInt32(dims.row)
 
-    func encodeQuantizationParameters(_ parameters: QuantizationParameters) {
-      var scale = parameters.scale
-      var zeroPoint = parameters.zeroPoint
-      var strategy = UInt32(parameters.strategy.rawValue)
-      var strategyVersion = UInt32(parameters.strategyVersion)
+    // L (logsumexp) is always written by the forward kernel.
+    let logsumexpBuffer = device.makeBuffer(
+      length: Int(sequenceLength) * MemoryLayout<Float>.size,
+      options: .storageModePrivate
+    )
+    encoder.setBuffer(logsumexpBuffer, offset: 0, index: 4)
 
+    // Quantized operands in Q, K, V order (matches createBufferBindings' sort).
+    let quantOperands: [QuantizedTensor] = [query, key, value]
+      .filter(\.parameters.precision.requiresQuantizationParameters)
+
+    var bufferIndex = 5
+    for operand in quantOperands {
+      var scale = operand.parameters.scale
+      var zeroPoint = Int32(operand.parameters.zeroPoint)
       encoder.setBytes(&scale, length: MemoryLayout<Float>.size, index: bufferIndex)
       bufferIndex += 1
-
       encoder.setBytes(&zeroPoint, length: MemoryLayout<Int32>.size, index: bufferIndex)
       bufferIndex += 1
-
-      encoder.setBytes(&strategy, length: MemoryLayout<UInt32>.size, index: bufferIndex)
+    }
+    for operand in quantOperands {
+      encoder.setBuffer(operand.blockScales, offset: 0, index: bufferIndex)
       bufferIndex += 1
-
-      encoder.setBytes(
-        &strategyVersion,
-        length: MemoryLayout<UInt32>.size,
-        index: bufferIndex
-      )
+      encoder.setBuffer(operand.blockZeroPoints, offset: 0, index: bufferIndex)
       bufferIndex += 1
     }
-
-    if query.parameters.precision.requiresQuantizationParameters {
-      encodeQuantizationParameters(query.parameters)
-    } else {}
-
-    if key.parameters.precision.requiresQuantizationParameters {
-      encodeQuantizationParameters(key.parameters)
-    } else {}
-
-    if value.parameters.precision.requiresQuantizationParameters {
-      encodeQuantizationParameters(value.parameters)
-    } else {}
-
-    // Set matrix dimensions
-    let dims = descriptor.baseDescriptor.matrixDimensions!
-    var M = UInt32(dims.row)
-    var N = UInt32(dims.column)
-    var K = UInt32(dims.head)
-
-    encoder.setBytes(&M, length: MemoryLayout<UInt32>.size, index: bufferIndex)
-    encoder.setBytes(&N, length: MemoryLayout<UInt32>.size, index: bufferIndex + 1)
-    encoder.setBytes(&K, length: MemoryLayout<UInt32>.size, index: bufferIndex + 2)
 
     // Use proper threadgroup configuration from AttentionKernel
     let kernelThreadgroupSize = Int(kernel.threadgroupSize)
     let blockParallelization = Int(kernel.blockDimensions.parallelization)
 
-    // Flash attention kernel expects specific dispatch configuration
+    // Grid covers the full row (query) dimension: one threadgroup per
+    // parallelization tile.
+    let blockCount = (Int(sequenceLength) + blockParallelization - 1) / blockParallelization
     let threadgroupSize = MTLSize(width: kernelThreadgroupSize, height: 1, depth: 1)
-    let numThreadgroups = (blockParallelization + Int(kernel.blockDimensions.parallelization) - 1) /
-      Int(kernel.blockDimensions.parallelization)
-    let gridSize = MTLSize(width: numThreadgroups, height: 1, depth: 1)
+    let gridSize = MTLSize(width: blockCount, height: 1, depth: 1)
 
     encoder.dispatchThreadgroups(gridSize, threadsPerThreadgroup: threadgroupSize)
     encoder.endEncoding()
@@ -951,21 +940,28 @@ public extension QuantizedAttention {
 // MARK: - Quantized Backward Pass Implementation
 
 extension QuantizedAttention {
-  /// Perform quantized attention backward pass for query gradients
+  /// Perform quantized attention backward pass for query gradients.
+  ///
+  /// Dispatches the *same* core `AttentionKernel` (type `.backwardQuery`) that
+  /// `SquareAttentionTest` validates against a CPU reference. INT8 operands are
+  /// dequantized on load inside the kernel.
+  ///
   /// - Parameters:
-  ///   - query: Quantized query tensor (INT8)
+  ///   - query: Quantized query tensor
   ///   - key: Key operand (QuantizedTensor or raw MTLBuffer)
   ///   - value: Value operand (QuantizedTensor or raw MTLBuffer)
-  ///   - gradOutput: Output gradients (FP32)
-  ///   - logsumexp: Logsumexp values from forward pass (FP32)
-  ///   - gradQuery: Output buffer for query gradients (FP32)
-  ///   - dValues: Output buffer for D intermediate values (FP32)
+  ///   - output: Forward output O — required because the kernel computes D = dO·O
+  ///   - gradOutput: Output gradients dO (FP32)
+  ///   - logsumexp: Logsumexp L from the forward pass (FP32)
+  ///   - gradQuery: Output buffer for dQ (FP32)
+  ///   - dValues: Output buffer for the D intermediate (FP32)
   ///   - descriptor: Quantized attention configuration
   /// - Returns: Command buffer for execution
   public func backwardQuery(
     query: QuantizedTensor,
     key: Any,
     value: Any,
+    output: MTLBuffer,
     gradOutput: MTLBuffer,
     logsumexp: MTLBuffer,
     gradQuery: MTLBuffer,
@@ -974,164 +970,48 @@ extension QuantizedAttention {
   )
     -> MTLCommandBuffer?
   {
-    let layout = QuantizedKernelLayoutManifest.layout(for: .backwardQuery)
-
-    guard
-      let keyBinding = makeBinding(for: key, label: "key"),
-      let valueBinding = makeBinding(for: value, label: "value")
-    else {
-      return nil
-    }
-
-    guard let dims = descriptor.baseDescriptor.matrixDimensions else {
-      print("Error: Descriptor missing matrix dimensions for backward query")
-      return nil
-    }
-
-    let metadata = prepareMultiHeadMetadata(
-      query: query,
-      keyBinding: keyBinding,
-      valueBinding: valueBinding,
-      descriptor: descriptor,
-      dims: dims
-    )
-
     guard
       !isDisposed, let queue = commandQueue,
-      let commandBuffer = queue.makeCommandBuffer()
+      let commandBuffer = queue.makeCommandBuffer(),
+      let keyBinding = makeBinding(for: key, label: "key"),
+      let valueBinding = makeBinding(for: value, label: "value"),
+      let dims = descriptor.baseDescriptor.matrixDimensions,
+      let core = getOrCreateCorePipeline(type: .backwardQuery, descriptor: descriptor),
+      let encoder = commandBuffer.makeComputeCommandEncoder()
     else {
-      print("Error: Failed to create command buffer for backward query (disposed: \(isDisposed))")
+      print("Error: Failed to set up backward query")
       return nil
     }
 
-    let precisionConfig = detectPrecisionConfiguration(
-      keyBinding: keyBinding,
-      valueBinding: valueBinding
+    encoder.setComputePipelineState(core.pipeline)
+    encoder.setThreadgroupMemoryLength(Int(core.kernel.threadgroupMemoryAllocation), index: 0)
+
+    // Operands (AttentionKernel.createBufferBindings, single-head layout):
+    //   Q@0 K@1 V@2 O@3 L@4 D@5 dO@6 ... dQ@9
+    // Strides / multi-head / mask left unset → null → single-head mode.
+    encoder.setBuffer(query.data, offset: 0, index: 0)
+    encoder.setBuffer(keyBinding.buffer, offset: 0, index: 1)
+    encoder.setBuffer(valueBinding.buffer, offset: 0, index: 2)
+    encoder.setBuffer(output, offset: 0, index: 3)
+    encoder.setBuffer(logsumexp, offset: 0, index: 4)
+    encoder.setBuffer(dValues, offset: 0, index: 5)
+    encoder.setBuffer(gradOutput, offset: 0, index: 6)
+    encoder.setBuffer(gradQuery, offset: 0, index: 9)
+
+    // Per-tensor quant params for quantized Q/K/V (blockwise left null).
+    bindQuantParams(
+      encoder, query: query, key: keyBinding, value: valueBinding,
+      config: descriptor.quantizationConfig, startingAt: 10
     )
 
-    let source = generateQuantizedBackwardQueryKernel(descriptor: descriptor)
-
-    let pipelineSalt = [
-      "hq\(metadata.numHeads)",
-      "hk\(metadata.numKVHeads)",
-      "qb\(query.blockScales != nil ? 1 : 0)",
-      "kb\(keyBinding.blockScales != nil ? 1 : 0)",
-      "vb\(valueBinding.blockScales != nil ? 1 : 0)",
-    ].joined(separator: "_")
-
-    guard
-      let pipelineState = createQuantizedBackwardPipeline(
-        source: source,
-        functionName: "quantized_backward_query",
-        cacheSalt: pipelineSalt
-      )
-    else {
-      print("Error: Failed to create pipeline state for backward query")
-      return nil
-    }
-
-    guard let encoder = commandBuffer.makeComputeCommandEncoder() else {
-      return nil
-    }
-
-    encoder.setComputePipelineState(pipelineState)
-
-    setBufferIfValid(encoder, buffer: query.data, index: layout.qData)
-    setBufferIfValid(encoder, buffer: keyBinding.buffer, index: layout.kData)
-    setBufferIfValid(encoder, buffer: valueBinding.buffer, index: layout.vData)
-    setBufferIfValid(encoder, buffer: gradOutput, index: layout.gradOutput)
-    setBufferIfValid(encoder, buffer: logsumexp, index: layout.logsumexp)
-    setBufferIfValid(encoder, buffer: gradQuery, index: layout.gradQuery)
-    setBufferIfValid(encoder, buffer: dValues, index: layout.dValues)
-
-    var qScale = query.parameters.scale
-    setBytesIfValid(encoder, value: &qScale, index: layout.qScale)
-    var qZeroPoint = Int32(query.parameters.zeroPoint)
-    setBytesIfValid(encoder, value: &qZeroPoint, index: layout.qZeroPoint)
-
-    var kScale = precisionConfig.keyQuantized ? keyBinding.scale : 1.0
-    setBytesIfValid(encoder, value: &kScale, index: layout.kScale)
-    var kZeroPoint = precisionConfig.keyQuantized ? keyBinding.zeroPoint : 0
-    setBytesIfValid(encoder, value: &kZeroPoint, index: layout.kZeroPoint)
-
-    var vScale = precisionConfig.valueQuantized ? valueBinding.scale : 1.0
-    setBytesIfValid(encoder, value: &vScale, index: layout.vScale)
-    var vZeroPoint = precisionConfig.valueQuantized ? valueBinding.zeroPoint : 0
-    setBytesIfValid(encoder, value: &vZeroPoint, index: layout.vZeroPoint)
-
-    if let qBlocks = query.blockScales {
-      setBufferIfValid(encoder, buffer: qBlocks, index: layout.qBlockScales)
-    } else {
-      setBufferIfValid(encoder, buffer: nil, index: layout.qBlockScales)
-    }
-    setBufferIfValid(encoder, buffer: query.blockZeroPoints, index: layout.qBlockZeroPoints)
-
-    setBufferIfValid(encoder, buffer: keyBinding.blockScales, index: layout.kBlockScales)
-    setBufferIfValid(encoder, buffer: keyBinding.blockZeroPoints, index: layout.kBlockZeroPoints)
-    setBufferIfValid(encoder, buffer: valueBinding.blockScales, index: layout.vBlockScales)
-    setBufferIfValid(encoder, buffer: valueBinding.blockZeroPoints, index: layout.vBlockZeroPoints)
-
-    var dimsVector = SIMD3<UInt32>(UInt32(dims.row), UInt32(dims.column), UInt32(dims.head))
-    setBytesIfValid(encoder, value: &dimsVector, index: layout.dims)
-
-    var steClipRange: Float = 6.0
-    setBytesIfValid(encoder, value: &steClipRange, index: layout.steClipRange)
-
-    // Populate stride metadata (contiguous layout by default).
-    var qStrides = metadata.qStrides
-    setArrayIfValid(encoder, values: &qStrides, index: layout.qStrides)
-
-    if !metadata.kStrides.isEmpty {
-      var kStrides = metadata.kStrides
-      setArrayIfValid(encoder, values: &kStrides, index: layout.kStrides)
-    } else {
-      setBufferIfValid(encoder, buffer: nil, index: layout.kStrides)
-    }
-
-    if !metadata.vStrides.isEmpty {
-      var vStrides = metadata.vStrides
-      setArrayIfValid(encoder, values: &vStrides, index: layout.vStrides)
-    } else {
-      setBufferIfValid(encoder, buffer: nil, index: layout.vStrides)
-    }
-
-    var numHeads = metadata.numHeads
-    setBytesIfValid(encoder, value: &numHeads, index: layout.numHeads)
-    var numKVHeads = metadata.numKVHeads
-    setBytesIfValid(encoder, value: &numKVHeads, index: layout.numKeyValueHeads)
-    var headDimension = UInt32(dims.head)
-    setBytesIfValid(encoder, value: &headDimension, index: layout.headDimension)
-    var sequenceLength = metadata.sequenceLengthQ
-    setBytesIfValid(encoder, value: &sequenceLength, index: layout.sequenceLength)
-
-    setBufferIfValid(encoder, buffer: nil, index: layout.scratch0)
-    setBufferIfValid(encoder, buffer: nil, index: layout.scratch1)
-
-    let threadgroupSize = MTLSize(width: 8, height: 8, depth: 1)
-    let gridSize = MTLSize(
-      width: (Int(dims.head) + threadgroupSize.width - 1) / threadgroupSize.width,
-      height: (Int(dims.row) + threadgroupSize.height - 1) / threadgroupSize.height,
-      depth: 1
-    )
-
-    encoder.dispatchThreadgroups(gridSize, threadsPerThreadgroup: threadgroupSize)
+    dispatchBackward(encoder, kernel: core.kernel, parallelizationDim: Int(dims.row))
     encoder.endEncoding()
-
     return commandBuffer
   }
 
-  /// Perform quantized attention backward pass for key and value gradients
-  /// - Parameters:
-  ///   - query: Quantized query tensor (INT8)
-  ///   - key: Key operand (QuantizedTensor or raw MTLBuffer)
-  ///   - value: Value operand (QuantizedTensor or raw MTLBuffer)
-  ///   - gradOutput: Output gradients (FP32)
-  ///   - logsumexp: Logsumexp values from forward pass (FP32)
-  ///   - dValues: D intermediate values from backward query (FP32)
-  ///   - gradKey: Output buffer for key gradients (FP32)
-  ///   - gradValue: Output buffer for value gradients (FP32)
-  ///   - descriptor: Quantized attention configuration
-  /// - Returns: Command buffer for execution
+  /// Perform quantized attention backward pass for key and value gradients.
+  ///
+  /// Dispatches the core `AttentionKernel` (type `.backwardKeyValue`).
   public func backwardKeyValue(
     query: QuantizedTensor,
     key: Any,
@@ -1145,153 +1025,126 @@ extension QuantizedAttention {
   )
     -> MTLCommandBuffer?
   {
-    let layout = QuantizedKernelLayoutManifest.layout(for: .backwardKeyValue)
-
-    guard
-      let keyBinding = makeBinding(for: key, label: "key"),
-      let valueBinding = makeBinding(for: value, label: "value")
-    else {
-      return nil
-    }
-
-    guard let dims = descriptor.baseDescriptor.matrixDimensions else {
-      print("Error: Descriptor missing matrix dimensions for backward key/value")
-      return nil
-    }
-
     guard
       !isDisposed, let queue = commandQueue,
-      let commandBuffer = queue.makeCommandBuffer()
+      let commandBuffer = queue.makeCommandBuffer(),
+      let keyBinding = makeBinding(for: key, label: "key"),
+      let valueBinding = makeBinding(for: value, label: "value"),
+      let dims = descriptor.baseDescriptor.matrixDimensions,
+      let core = getOrCreateCorePipeline(type: .backwardKeyValue, descriptor: descriptor),
+      let encoder = commandBuffer.makeComputeCommandEncoder()
     else {
-      print(
-        "Error: Failed to create command buffer for backward key-value (disposed: \(isDisposed))"
-      )
+      print("Error: Failed to set up backward key-value")
       return nil
     }
 
-    let precisionConfig = detectPrecisionConfiguration(
-      keyBinding: keyBinding,
-      valueBinding: valueBinding
+    encoder.setComputePipelineState(core.pipeline)
+    encoder.setThreadgroupMemoryLength(Int(core.kernel.threadgroupMemoryAllocation), index: 0)
+
+    // Operands: Q@0 K@1 V@2 L@4 D@5 dO@6 dV@7 dK@8
+    encoder.setBuffer(query.data, offset: 0, index: 0)
+    encoder.setBuffer(keyBinding.buffer, offset: 0, index: 1)
+    encoder.setBuffer(valueBinding.buffer, offset: 0, index: 2)
+    encoder.setBuffer(logsumexp, offset: 0, index: 4)
+    encoder.setBuffer(dValues, offset: 0, index: 5)
+    encoder.setBuffer(gradOutput, offset: 0, index: 6)
+    encoder.setBuffer(gradValue, offset: 0, index: 7)
+    encoder.setBuffer(gradKey, offset: 0, index: 8)
+
+    bindQuantParams(
+      encoder, query: query, key: keyBinding, value: valueBinding,
+      config: descriptor.quantizationConfig, startingAt: 9
     )
 
-    let metadata = prepareMultiHeadMetadata(
-      query: query,
-      keyBinding: keyBinding,
-      valueBinding: valueBinding,
-      descriptor: descriptor,
-      dims: dims
-    )
-
-    let source = generateQuantizedBackwardKeyValueKernel(descriptor: descriptor)
-
-    let pipelineSalt = [
-      "hq\(metadata.numHeads)",
-      "hk\(metadata.numKVHeads)",
-      "qb\(query.blockScales != nil ? 1 : 0)",
-      "kb\(keyBinding.blockScales != nil ? 1 : 0)",
-      "vb\(valueBinding.blockScales != nil ? 1 : 0)",
-    ].joined(separator: "_")
-
-    guard
-      let pipelineState = createQuantizedBackwardPipeline(
-        source: source,
-        functionName: "quantized_backward_key_value",
-        cacheSalt: pipelineSalt
-      )
-    else {
-      print("Error: Failed to create pipeline state for backward key-value")
-      return nil
-    }
-
-    guard let encoder = commandBuffer.makeComputeCommandEncoder() else {
-      return nil
-    }
-
-    encoder.setComputePipelineState(pipelineState)
-
-    setBufferIfValid(encoder, buffer: query.data, index: layout.qData)
-    setBufferIfValid(encoder, buffer: keyBinding.buffer, index: layout.kData)
-    setBufferIfValid(encoder, buffer: valueBinding.buffer, index: layout.vData)
-    setBufferIfValid(encoder, buffer: gradOutput, index: layout.gradOutput)
-    setBufferIfValid(encoder, buffer: logsumexp, index: layout.logsumexp)
-    setBufferIfValid(encoder, buffer: dValues, index: layout.dValues)
-    setBufferIfValid(encoder, buffer: gradKey, index: layout.gradKey)
-    setBufferIfValid(encoder, buffer: gradValue, index: layout.gradValue)
-
-    var qScale = query.parameters.scale
-    setBytesIfValid(encoder, value: &qScale, index: layout.qScale)
-    var qZeroPoint = Int32(query.parameters.zeroPoint)
-    setBytesIfValid(encoder, value: &qZeroPoint, index: layout.qZeroPoint)
-
-    var kScale = precisionConfig.keyQuantized ? keyBinding.scale : 1.0
-    setBytesIfValid(encoder, value: &kScale, index: layout.kScale)
-    var kZeroPoint = precisionConfig.keyQuantized ? keyBinding.zeroPoint : 0
-    setBytesIfValid(encoder, value: &kZeroPoint, index: layout.kZeroPoint)
-
-    var vScale = precisionConfig.valueQuantized ? valueBinding.scale : 1.0
-    setBytesIfValid(encoder, value: &vScale, index: layout.vScale)
-    var vZeroPoint = precisionConfig.valueQuantized ? valueBinding.zeroPoint : 0
-    setBytesIfValid(encoder, value: &vZeroPoint, index: layout.vZeroPoint)
-
-    if let qBlocks = query.blockScales {
-      setBufferIfValid(encoder, buffer: qBlocks, index: layout.qBlockScales)
-    } else {
-      setBufferIfValid(encoder, buffer: nil, index: layout.qBlockScales)
-    }
-    setBufferIfValid(encoder, buffer: query.blockZeroPoints, index: layout.qBlockZeroPoints)
-
-    setBufferIfValid(encoder, buffer: keyBinding.blockScales, index: layout.kBlockScales)
-    setBufferIfValid(encoder, buffer: keyBinding.blockZeroPoints, index: layout.kBlockZeroPoints)
-    setBufferIfValid(encoder, buffer: valueBinding.blockScales, index: layout.vBlockScales)
-    setBufferIfValid(encoder, buffer: valueBinding.blockZeroPoints, index: layout.vBlockZeroPoints)
-
-    var dimsVector = SIMD3<UInt32>(UInt32(dims.row), UInt32(dims.column), UInt32(dims.head))
-    setBytesIfValid(encoder, value: &dimsVector, index: layout.dims)
-
-    var steClipRange: Float = 6.0
-    setBytesIfValid(encoder, value: &steClipRange, index: layout.steClipRange)
-
-    var qStrides = metadata.qStrides
-    setArrayIfValid(encoder, values: &qStrides, index: layout.qStrides)
-
-    if !metadata.kStrides.isEmpty {
-      var kStrides = metadata.kStrides
-      setArrayIfValid(encoder, values: &kStrides, index: layout.kStrides)
-    } else {
-      setBufferIfValid(encoder, buffer: nil, index: layout.kStrides)
-    }
-
-    if !metadata.vStrides.isEmpty {
-      var vStrides = metadata.vStrides
-      setArrayIfValid(encoder, values: &vStrides, index: layout.vStrides)
-    } else {
-      setBufferIfValid(encoder, buffer: nil, index: layout.vStrides)
-    }
-
-    var numHeads = metadata.numHeads
-    setBytesIfValid(encoder, value: &numHeads, index: layout.numHeads)
-    var numKVHeads = metadata.numKVHeads
-    setBytesIfValid(encoder, value: &numKVHeads, index: layout.numKeyValueHeads)
-    var headDimension = UInt32(dims.head)
-    setBytesIfValid(encoder, value: &headDimension, index: layout.headDimension)
-    let kvSequence = UInt32(max(metadata.kShape.sequence, Int(dims.column)))
-    var sequenceLength = kvSequence
-    setBytesIfValid(encoder, value: &sequenceLength, index: layout.sequenceLength)
-
-    setBufferIfValid(encoder, buffer: nil, index: layout.scratch0)
-    setBufferIfValid(encoder, buffer: nil, index: layout.scratch1)
-
-    let threadgroupSize = MTLSize(width: 8, height: 8, depth: 1)
-    let gridSize = MTLSize(
-      width: (Int(dims.head) + threadgroupSize.width - 1) / threadgroupSize.width,
-      height: (Int(dims.column) + threadgroupSize.height - 1) / threadgroupSize.height,
-      depth: 1
-    )
-
-    encoder.dispatchThreadgroups(gridSize, threadsPerThreadgroup: threadgroupSize)
+    dispatchBackward(encoder, kernel: core.kernel, parallelizationDim: Int(dims.row))
     encoder.endEncoding()
-
     return commandBuffer
+  }
+
+  // MARK: - Core backward pipeline helpers
+
+  /// Build the proven core `AttentionKernel` pipeline for the given type.
+  /// Per-tensor quantization only (HAS_BLOCKWISE_* = false); blockwise buffers
+  /// are emitted by the kernel but left null and never dereferenced.
+  private func getOrCreateCorePipeline(
+    type: AttentionKernelType,
+    descriptor: QuantizedAttentionDescriptor
+  )
+    -> (pipeline: MTLComputePipelineState, kernel: AttentionKernel)?
+  {
+    let kernel = AttentionKernel(descriptor: descriptor.kernelDescriptor(type: type))
+    let source = kernel.createSource()
+    let cacheKey = "core_\(type)_\(source.hashValue)"
+
+    if let cached = pipelineCache[cacheKey] {
+      return (cached, kernel)
+    }
+
+    do {
+      let library = try device.makeLibrary(source: source, options: nil)
+      let functionConstants = MTLFunctionConstantValues()
+      descriptor.baseDescriptor.setFunctionConstants(functionConstants)
+      var bq = false
+      var bk = false
+      var bv = false
+      var blockSize: UInt32 = 1
+      functionConstants.setConstantValue(&bq, type: .bool, index: 5)
+      functionConstants.setConstantValue(&bk, type: .bool, index: 6)
+      functionConstants.setConstantValue(&bv, type: .bool, index: 7)
+      functionConstants.setConstantValue(&blockSize, type: .uint, index: 8)
+
+      let function = try library.makeFunction(name: "attention", constantValues: functionConstants)
+      let pipelineState = try device.makeComputePipelineState(function: function)
+      pipelineCache[cacheKey] = pipelineState
+      return (pipelineState, kernel)
+    } catch {
+      print("Pipeline creation error (\(type)): \(error)")
+      return nil
+    }
+  }
+
+  /// Bind per-tensor (scale, zero_point, strategy, strategy_version) for the
+  /// quantized operands among Q/K/V, in bufferBinding order — mirroring
+  /// `AttentionKernel.createBufferBindings` pass 2. Blockwise buffers (pass 3)
+  /// are left null (HAS_BLOCKWISE = false).
+  private func bindQuantParams(
+    _ encoder: MTLComputeCommandEncoder,
+    query: QuantizedTensor,
+    key: OperandBinding,
+    value: OperandBinding,
+    config: QuantizedAttention.Configuration,
+    startingAt start: Int
+  ) {
+    var index = start
+    func emit(_ scale: Float, _ zeroPoint: Int32) {
+      var scale = scale
+      encoder.setBytes(&scale, length: MemoryLayout<Float>.size, index: index)
+      index += 1
+      var zeroPoint = zeroPoint
+      encoder.setBytes(&zeroPoint, length: MemoryLayout<Int32>.size, index: index)
+      index += 1
+    }
+    if config.queryPrecision.requiresQuantizationParameters {
+      emit(query.parameters.scale, Int32(query.parameters.zeroPoint))
+    }
+    if config.keyPrecision.requiresQuantizationParameters {
+      emit(key.scale, key.zeroPoint)
+    }
+    if config.valuePrecision.requiresQuantizationParameters {
+      emit(value.scale, value.zeroPoint)
+    }
+  }
+
+  private func dispatchBackward(
+    _ encoder: MTLComputeCommandEncoder,
+    kernel: AttentionKernel,
+    parallelizationDim: Int
+  ) {
+    let blockParallelization = Int(kernel.blockDimensions.parallelization)
+    let blockCount = (parallelizationDim + blockParallelization - 1) / blockParallelization
+    let threadgroupSize = MTLSize(width: Int(kernel.threadgroupSize), height: 1, depth: 1)
+    let gridSize = MTLSize(width: blockCount, height: 1, depth: 1)
+    encoder.dispatchThreadgroups(gridSize, threadsPerThreadgroup: threadgroupSize)
   }
 
   // MARK: - Private Helper Methods

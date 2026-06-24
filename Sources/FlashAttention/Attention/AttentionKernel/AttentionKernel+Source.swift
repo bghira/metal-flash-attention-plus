@@ -237,27 +237,19 @@ extension AttentionKernel {
       output += "  " + line + "\n"
     }
 
-    // Second pass: quantization parameters for quantized operands
+    // Second pass: per-tensor quantization parameters for quantized operands.
+    // Only scale and zero_point are consumed by the dequantizing load path.
+    // strategy / strategy_version are kept on the Swift QuantizationParameters
+    // struct only — emitting them as Metal buffers wastes scarce buffer slots
+    // (Metal caps at index 30) and overflows INT8 backward kernels.
     for operand in operands where isQuantized(operand) {
       let operandName = "\(operand)".lowercased()
 
-      // Scale parameter
       output += "  constant float &\(operandName)_scale [[buffer(\(currentBufferIndex))]], \n"
       currentBufferIndex += 1
 
-      // Zero point parameter
       output +=
         "  constant int32_t &\(operandName)_zero_point [[buffer(\(currentBufferIndex))]], \n"
-      currentBufferIndex += 1
-
-      // Quantization strategy selector
-      output +=
-        "  constant uint &\(operandName)_strategy [[buffer(\(currentBufferIndex))]], \n"
-      currentBufferIndex += 1
-
-      // Quantization strategy version for forward compatibility
-      output +=
-        "  constant uint &\(operandName)_strategy_version [[buffer(\(currentBufferIndex))]], \n"
       currentBufferIndex += 1
     }
 
