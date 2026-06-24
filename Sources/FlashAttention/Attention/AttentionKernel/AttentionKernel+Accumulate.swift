@@ -460,7 +460,7 @@ extension AttentionKernel {
     {
       // Capture the outer traversal offset before the inner loop's `c`
       // shadows it, so the blockwise index can recover the full coordinate.
-      return """
+      """
 
       uint bw_traversal_base = \(traversalOffset);
       #pragma clang loop unroll(full)

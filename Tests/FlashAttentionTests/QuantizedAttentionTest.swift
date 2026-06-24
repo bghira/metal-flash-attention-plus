@@ -343,7 +343,6 @@ final class QuantizedAttentionTest: XCTestCase {
     XCTAssertLessThan(Float(int4Size), Float(fp32Size) * 0.15) // Less than 15% of FP32
   }
 
-
   func testKernelSourceIncludesQuantizationBuffers() {
     var baseDescriptor = AttentionDescriptor()
     baseDescriptor.matrixDimensions = (row: 16, column: 16, head: 16)
@@ -471,9 +470,11 @@ final class QuantizedAttentionTest: XCTestCase {
         queryShape: shape, keyShape: shape, valueShape: shape, config: config
       )
 
-      guard let outputBuffer = device.makeBuffer(
-        length: totalElements * MemoryLayout<Float>.size, options: .storageModeShared
-      ) else {
+      guard
+        let outputBuffer = device.makeBuffer(
+          length: totalElements * MemoryLayout<Float>.size, options: .storageModeShared
+        )
+      else {
         XCTFail("Could not create output buffer")
         return
       }
@@ -487,23 +488,32 @@ final class QuantizedAttentionTest: XCTestCase {
         baseDescriptor: baseDescriptor, quantizationConfig: config
       )
 
-      guard let commandBuffer = quantizedAttention.forward(
-        query: tensors.query, key: tensors.key, value: tensors.value,
-        output: outputBuffer, descriptor: descriptor
-      ) else {
+      guard
+        let commandBuffer = quantizedAttention.forward(
+          query: tensors.query, key: tensors.key, value: tensors.value,
+          output: outputBuffer, descriptor: descriptor
+        )
+      else {
         XCTFail("\(label) forward returned nil command buffer")
         return
       }
       commandBuffer.commit()
       commandBuffer.waitUntilCompleted()
-      XCTAssertNil(commandBuffer.error, "\(label) forward failed: \(commandBuffer.error?.localizedDescription ?? "")")
+      XCTAssertNil(
+        commandBuffer.error,
+        "\(label) forward failed: \(commandBuffer.error?.localizedDescription ?? "")"
+      )
 
       let gpuOutput = readBuffer(outputBuffer, count: totalElements)
       let relErr = relativeError(gpuOutput, reference)
       let nanCount = gpuOutput.filter { $0.isNaN || $0.isInfinite }.count
       print("\(label) forward: relativeError=\(relErr), NaN/Inf=\(nanCount)/\(totalElements)")
       XCTAssertEqual(nanCount, 0, "\(label) forward produced NaN/Inf output")
-      XCTAssertLessThan(relErr, tolerance, "\(label) forward relative error too high (dispatch desync?)")
+      XCTAssertLessThan(
+        relErr,
+        tolerance,
+        "\(label) forward relative error too high (dispatch desync?)"
+      )
     }
 
     runForward(precision: .FP16, tolerance: 0.05, label: "FP16")
@@ -518,7 +528,7 @@ final class QuantizedAttentionTest: XCTestCase {
     let headDim = 16
     let totalElements = sequenceLength * headDim
 
-    var seed: UInt64 = 0xBACC_0DE
+    var seed: UInt64 = 0xBACC0DE
     func nextRandom() -> Float {
       seed = seed &* 6_364_136_223_846_793_005 &+ 1_442_695_040_888_963_407
       return Float(Int32(truncatingIfNeeded: seed)) / Float(Int32.max)
@@ -585,27 +595,39 @@ final class QuantizedAttentionTest: XCTestCase {
         baseDescriptor: baseDescriptor, quantizationConfig: config
       )
 
-      guard let queryCB = quantizedAttention.backwardQuery(
-        query: tensors.query, key: tensors.key, value: tensors.value,
-        output: outputBuffer, gradOutput: gradOutputBuffer, logsumexp: logsumexpBuffer,
-        gradQuery: gradQueryBuffer, dValues: dValuesBuffer, descriptor: descriptor
-      ) else {
+      guard
+        let queryCB = quantizedAttention.backwardQuery(
+          query: tensors.query, key: tensors.key, value: tensors.value,
+          output: outputBuffer, gradOutput: gradOutputBuffer, logsumexp: logsumexpBuffer,
+          gradQuery: gradQueryBuffer, dValues: dValuesBuffer, descriptor: descriptor
+        )
+      else {
         XCTFail("\(label): backwardQuery returned nil")
         return
       }
-      queryCB.commit(); queryCB.waitUntilCompleted()
-      XCTAssertNil(queryCB.error, "\(label): backwardQuery failed: \(queryCB.error?.localizedDescription ?? "")")
+      queryCB.commit()
+      queryCB.waitUntilCompleted()
+      XCTAssertNil(
+        queryCB.error,
+        "\(label): backwardQuery failed: \(queryCB.error?.localizedDescription ?? "")"
+      )
 
-      guard let kvCB = quantizedAttention.backwardKeyValue(
-        query: tensors.query, key: tensors.key, value: tensors.value,
-        gradOutput: gradOutputBuffer, logsumexp: logsumexpBuffer, dValues: dValuesBuffer,
-        gradKey: gradKeyBuffer, gradValue: gradValueBuffer, descriptor: descriptor
-      ) else {
+      guard
+        let kvCB = quantizedAttention.backwardKeyValue(
+          query: tensors.query, key: tensors.key, value: tensors.value,
+          gradOutput: gradOutputBuffer, logsumexp: logsumexpBuffer, dValues: dValuesBuffer,
+          gradKey: gradKeyBuffer, gradValue: gradValueBuffer, descriptor: descriptor
+        )
+      else {
         XCTFail("\(label): backwardKeyValue returned nil")
         return
       }
-      kvCB.commit(); kvCB.waitUntilCompleted()
-      XCTAssertNil(kvCB.error, "\(label): backwardKeyValue failed: \(kvCB.error?.localizedDescription ?? "")")
+      kvCB.commit()
+      kvCB.waitUntilCompleted()
+      XCTAssertNil(
+        kvCB.error,
+        "\(label): backwardKeyValue failed: \(kvCB.error?.localizedDescription ?? "")"
+      )
 
       let dQ = readBuffer(gradQueryBuffer, count: totalElements)
       let dK = readBuffer(gradKeyBuffer, count: totalElements)
@@ -616,7 +638,9 @@ final class QuantizedAttentionTest: XCTestCase {
       let nanCount = dQ.filter { $0.isNaN || $0.isInfinite }.count
         + dK.filter { $0.isNaN || $0.isInfinite }.count
         + dV.filter { $0.isNaN || $0.isInfinite }.count
-      print("\(label) backward: dQ_err=\(dQerr), dK_err=\(dKerr), dV_err=\(dVerr), NaN/Inf=\(nanCount)")
+      print(
+        "\(label) backward: dQ_err=\(dQerr), dK_err=\(dKerr), dV_err=\(dVerr), NaN/Inf=\(nanCount)"
+      )
 
       XCTAssertEqual(nanCount, 0, "\(label): backward produced NaN/Inf gradients")
       XCTAssertLessThan(dQerr, tolerance, "\(label): dQ relative error too high")
@@ -659,7 +683,8 @@ final class QuantizedAttentionTest: XCTestCase {
       XCTFail("blockwise factory did not materialize blockScales")
       return
     }
-    let expectedNumBlocks = ((rows + blockSize - 1) / blockSize) * ((cols + blockSize - 1) / blockSize)
+    let expectedNumBlocks = ((rows + blockSize - 1) / blockSize) *
+      ((cols + blockSize - 1) / blockSize)
     let allScales = Array(UnsafeBufferPointer(
       start: blockScalesBuf.contents().bindMemory(to: Float.self, capacity: expectedNumBlocks),
       count: expectedNumBlocks
@@ -703,37 +728,54 @@ final class QuantizedAttentionTest: XCTestCase {
 
     let shape = [sequenceLength, headDim]
     let queryTensor = QuantizedTensor.from(
-      device: device, floatData: queryData, shape: shape, precision: .FP16)
+      device: device, floatData: queryData, shape: shape, precision: .FP16
+    )
     let keyTensor = QuantizedTensor.from(
       device: device, floatData: keyData, shape: shape, precision: .INT8,
-      mode: .blockwise(blockSizeK: blockSize))
+      mode: .blockwise(blockSizeK: blockSize)
+    )
     let valueTensor = QuantizedTensor.from(
       device: device, floatData: valueData, shape: shape, precision: .INT8,
-      mode: .blockwise(blockSizeK: blockSize))
+      mode: .blockwise(blockSizeK: blockSize)
+    )
     XCTAssertNotNil(keyTensor.blockScales)
     XCTAssertNotNil(valueTensor.blockScales)
 
-    guard let outputBuffer = device.makeBuffer(
-      length: totalElements * MemoryLayout<Float>.size, options: .storageModeShared
-    ) else { XCTFail("Could not create output buffer"); return }
+    guard
+      let outputBuffer = device.makeBuffer(
+        length: totalElements * MemoryLayout<Float>.size, options: .storageModeShared
+      )
+    else { XCTFail("Could not create output buffer")
+      return
+    }
 
     var baseDescriptor = AttentionDescriptor()
     baseDescriptor.matrixDimensions = (
-      row: UInt32(sequenceLength), column: UInt32(sequenceLength), head: UInt16(headDim))
+      row: UInt32(sequenceLength), column: UInt32(sequenceLength), head: UInt16(headDim)
+    )
     baseDescriptor.transposeState = (Q: false, K: false, V: false, O: false)
     var config = QuantizedAttention.Configuration()
     config.queryPrecision = .FP16
     config.keyPrecision = .INT8
     config.valuePrecision = .INT8
     let descriptor = QuantizedAttention.QuantizedAttentionDescriptor(
-      baseDescriptor: baseDescriptor, quantizationConfig: config)
+      baseDescriptor: baseDescriptor, quantizationConfig: config
+    )
 
-    guard let commandBuffer = quantizedAttention.forward(
-      query: queryTensor, key: keyTensor, value: valueTensor,
-      output: outputBuffer, descriptor: descriptor
-    ) else { XCTFail("Blockwise forward returned nil"); return }
-    commandBuffer.commit(); commandBuffer.waitUntilCompleted()
-    XCTAssertNil(commandBuffer.error, "Blockwise forward failed: \(commandBuffer.error?.localizedDescription ?? "")")
+    guard
+      let commandBuffer = quantizedAttention.forward(
+        query: queryTensor, key: keyTensor, value: valueTensor,
+        output: outputBuffer, descriptor: descriptor
+      )
+    else { XCTFail("Blockwise forward returned nil")
+      return
+    }
+    commandBuffer.commit()
+    commandBuffer.waitUntilCompleted()
+    XCTAssertNil(
+      commandBuffer.error,
+      "Blockwise forward failed: \(commandBuffer.error?.localizedDescription ?? "")"
+    )
 
     let gpuOutput = readBuffer(outputBuffer, count: totalElements)
     let relErr = relativeError(gpuOutput, reference)
@@ -741,7 +783,11 @@ final class QuantizedAttentionTest: XCTestCase {
     print("Blockwise FP16-Q/INT8-K,V forward: relativeError=\(relErr), NaN/Inf=\(nanCount)")
 
     XCTAssertEqual(nanCount, 0, "Blockwise forward produced NaN/Inf output")
-    XCTAssertLessThan(relErr, 0.15, "Blockwise forward relative error too high (2D block indexing wrong?)")
+    XCTAssertLessThan(
+      relErr,
+      0.15,
+      "Blockwise forward relative error too high (2D block indexing wrong?)"
+    )
   }
 }
 
@@ -769,7 +815,6 @@ private extension QuantizedAttentionTest {
     return Float(numerator / denominator)
   }
 
-
   // MARK: - CPU Reference Oracles
 
   /// Naive CPU reference: O = softmax(Q·Kᵀ / √d) · V, in Float.
@@ -777,7 +822,9 @@ private extension QuantizedAttentionTest {
   static func cpuReferenceAttention(
     query: [Float], key: [Float], value: [Float],
     rows: Int, cols: Int, headDim: Int
-  ) -> [Float] {
+  )
+    -> [Float]
+  {
     precondition(query.count == rows * headDim)
     precondition(key.count == cols * headDim)
     precondition(value.count == cols * headDim)
@@ -820,7 +867,9 @@ private extension QuantizedAttentionTest {
   static func cpuReferenceBackward(
     query: [Float], key: [Float], value: [Float], gradOutput: [Float],
     rows: Int, cols: Int, headDim: Int
-  ) -> (logsumexp: [Float], output: [Float], dQ: [Float], dK: [Float], dV: [Float]) {
+  )
+    -> (logsumexp: [Float], output: [Float], dQ: [Float], dK: [Float], dV: [Float])
+  {
     precondition(query.count == rows * headDim)
     precondition(key.count == cols * headDim)
     precondition(value.count == cols * headDim)
@@ -848,10 +897,14 @@ private extension QuantizedAttentionTest {
         sumExp += scores[j]
       }
       logsumexp[i] = maxScore + Foundation.log(sumExp)
-      for j in 0..<cols { probabilities[i][j] = scores[j] / sumExp }
+      for j in 0..<cols {
+        probabilities[i][j] = scores[j] / sumExp
+      }
       for d in 0..<headDim {
         var acc: Float = 0
-        for j in 0..<cols { acc += probabilities[i][j] * value[j * headDim + d] }
+        for j in 0..<cols {
+          acc += probabilities[i][j] * value[j * headDim + d]
+        }
         output[i * headDim + d] = acc
       }
     }

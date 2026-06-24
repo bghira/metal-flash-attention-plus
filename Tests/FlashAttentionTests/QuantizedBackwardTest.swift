@@ -118,7 +118,8 @@ final class QuantizedBackwardTest: XCTestCase {
 
     // Execute backward query
     let outputBuffer = device.makeBuffer(
-      length: tensorSize * MemoryLayout<Float>.size, options: .storageModeShared)!
+      length: tensorSize * MemoryLayout<Float>.size, options: .storageModeShared
+    )!
     let commandBuffer = quantizedAttention.backwardQuery(
       query: query,
       key: key,
@@ -326,7 +327,8 @@ final class QuantizedBackwardTest: XCTestCase {
     )
 
     let outputBuffer = device.makeBuffer(
-      length: tensorSize * MemoryLayout<Float>.size, options: .storageModeShared)!
+      length: tensorSize * MemoryLayout<Float>.size, options: .storageModeShared
+    )!
     let commandBuffer = quantizedAttention.backwardQuery(
       query: tensor,
       key: tensor,

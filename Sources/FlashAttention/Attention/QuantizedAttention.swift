@@ -209,20 +209,23 @@ public class QuantizedAttention {
     encoder.setBuffer(logsumexpBuffer, offset: 0, index: 4)
 
     // Quantized operands in Q, K, V order (matches createBufferBindings' sort).
-    let quantOperands: [QuantizedTensor] = [query, key, value].filter {
-      $0.parameters.precision.requiresQuantizationParameters
-    }
+    let quantOperands: [QuantizedTensor] = [query, key, value]
+      .filter(\.parameters.precision.requiresQuantizationParameters)
 
     var bufferIndex = 5
     for operand in quantOperands {
       var scale = operand.parameters.scale
       var zeroPoint = Int32(operand.parameters.zeroPoint)
-      encoder.setBytes(&scale, length: MemoryLayout<Float>.size, index: bufferIndex); bufferIndex += 1
-      encoder.setBytes(&zeroPoint, length: MemoryLayout<Int32>.size, index: bufferIndex); bufferIndex += 1
+      encoder.setBytes(&scale, length: MemoryLayout<Float>.size, index: bufferIndex)
+      bufferIndex += 1
+      encoder.setBytes(&zeroPoint, length: MemoryLayout<Int32>.size, index: bufferIndex)
+      bufferIndex += 1
     }
     for operand in quantOperands {
-      encoder.setBuffer(operand.blockScales, offset: 0, index: bufferIndex); bufferIndex += 1
-      encoder.setBuffer(operand.blockZeroPoints, offset: 0, index: bufferIndex); bufferIndex += 1
+      encoder.setBuffer(operand.blockScales, offset: 0, index: bufferIndex)
+      bufferIndex += 1
+      encoder.setBuffer(operand.blockZeroPoints, offset: 0, index: bufferIndex)
+      bufferIndex += 1
     }
 
     // Use proper threadgroup configuration from AttentionKernel
@@ -967,13 +970,14 @@ extension QuantizedAttention {
   )
     -> MTLCommandBuffer?
   {
-    guard !isDisposed, let queue = commandQueue,
-          let commandBuffer = queue.makeCommandBuffer(),
-          let keyBinding = makeBinding(for: key, label: "key"),
-          let valueBinding = makeBinding(for: value, label: "value"),
-          let dims = descriptor.baseDescriptor.matrixDimensions,
-          let core = getOrCreateCorePipeline(type: .backwardQuery, descriptor: descriptor),
-          let encoder = commandBuffer.makeComputeCommandEncoder()
+    guard
+      !isDisposed, let queue = commandQueue,
+      let commandBuffer = queue.makeCommandBuffer(),
+      let keyBinding = makeBinding(for: key, label: "key"),
+      let valueBinding = makeBinding(for: value, label: "value"),
+      let dims = descriptor.baseDescriptor.matrixDimensions,
+      let core = getOrCreateCorePipeline(type: .backwardQuery, descriptor: descriptor),
+      let encoder = commandBuffer.makeComputeCommandEncoder()
     else {
       print("Error: Failed to set up backward query")
       return nil
@@ -1021,13 +1025,14 @@ extension QuantizedAttention {
   )
     -> MTLCommandBuffer?
   {
-    guard !isDisposed, let queue = commandQueue,
-          let commandBuffer = queue.makeCommandBuffer(),
-          let keyBinding = makeBinding(for: key, label: "key"),
-          let valueBinding = makeBinding(for: value, label: "value"),
-          let dims = descriptor.baseDescriptor.matrixDimensions,
-          let core = getOrCreateCorePipeline(type: .backwardKeyValue, descriptor: descriptor),
-          let encoder = commandBuffer.makeComputeCommandEncoder()
+    guard
+      !isDisposed, let queue = commandQueue,
+      let commandBuffer = queue.makeCommandBuffer(),
+      let keyBinding = makeBinding(for: key, label: "key"),
+      let valueBinding = makeBinding(for: value, label: "value"),
+      let dims = descriptor.baseDescriptor.matrixDimensions,
+      let core = getOrCreateCorePipeline(type: .backwardKeyValue, descriptor: descriptor),
+      let encoder = commandBuffer.makeComputeCommandEncoder()
     else {
       print("Error: Failed to set up backward key-value")
       return nil
@@ -1064,7 +1069,9 @@ extension QuantizedAttention {
   private func getOrCreateCorePipeline(
     type: AttentionKernelType,
     descriptor: QuantizedAttentionDescriptor
-  ) -> (pipeline: MTLComputePipelineState, kernel: AttentionKernel)? {
+  )
+    -> (pipeline: MTLComputePipelineState, kernel: AttentionKernel)?
+  {
     let kernel = AttentionKernel(descriptor: descriptor.kernelDescriptor(type: type))
     let source = kernel.createSource()
     let cacheKey = "core_\(type)_\(source.hashValue)"
@@ -1111,9 +1118,11 @@ extension QuantizedAttention {
     var index = start
     func emit(_ scale: Float, _ zeroPoint: Int32) {
       var scale = scale
-      encoder.setBytes(&scale, length: MemoryLayout<Float>.size, index: index); index += 1
+      encoder.setBytes(&scale, length: MemoryLayout<Float>.size, index: index)
+      index += 1
       var zeroPoint = zeroPoint
-      encoder.setBytes(&zeroPoint, length: MemoryLayout<Int32>.size, index: index); index += 1
+      encoder.setBytes(&zeroPoint, length: MemoryLayout<Int32>.size, index: index)
+      index += 1
     }
     if config.queryPrecision.requiresQuantizationParameters {
       emit(query.parameters.scale, Int32(query.parameters.zeroPoint))
@@ -1137,7 +1146,6 @@ extension QuantizedAttention {
     let gridSize = MTLSize(width: blockCount, height: 1, depth: 1)
     encoder.dispatchThreadgroups(gridSize, threadsPerThreadgroup: threadgroupSize)
   }
-
 
   // MARK: - Private Helper Methods
 

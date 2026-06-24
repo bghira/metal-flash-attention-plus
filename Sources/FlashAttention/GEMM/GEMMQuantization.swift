@@ -866,16 +866,19 @@ public class QuantizedTensor: Codable {
 
     // Use the per-block path when the tensor carries block scales so the
     // round-trip matches how the kernel will dequantize.
-    if let bs = blockSizeK, let scalesBuf = blockScales, let zpBuf = blockZeroPoints,
-       case .blockwise = parameters.mode
+    if
+      let bs = blockSizeK, let scalesBuf = blockScales, let zpBuf = blockZeroPoints,
+      case .blockwise = parameters.mode
     {
       let numBlocks = scalesBuf.length / MemoryLayout<Float>.size
       let scales = Array(UnsafeBufferPointer(
         start: scalesBuf.contents().bindMemory(to: Float.self, capacity: numBlocks),
-        count: numBlocks))
+        count: numBlocks
+      ))
       let zps = Array(UnsafeBufferPointer(
         start: zpBuf.contents().bindMemory(to: Int32.self, capacity: numBlocks),
-        count: numBlocks))
+        count: numBlocks
+      ))
       result.withUnsafeMutableBufferPointer { floatPtr in
         parameters.precision.dequantizeBlockwise(
           input: data.contents(),
@@ -1011,7 +1014,10 @@ public class QuantizedTensor: Codable {
 
     // Retrieve the device that will own the decoded buffers.
     let device: MTLDevice
-    if let box = decoder.userInfo[QuantizedTensorCoding.deviceKey] as? QuantizedTensorCoding.DeviceBox {
+    if
+      let box = decoder.userInfo[QuantizedTensorCoding.deviceKey] as? QuantizedTensorCoding
+        .DeviceBox
+    {
       device = box.device
     } else if let defaultDevice = MTLCreateSystemDefaultDevice() {
       device = defaultDevice
@@ -1064,7 +1070,8 @@ public class QuantizedTensor: Codable {
     let decoder = JSONDecoder()
 
     // Store device in userInfo for access during decoding
-    decoder.userInfo[QuantizedTensorCoding.deviceKey] = QuantizedTensorCoding.DeviceBox(device: device)
+    decoder.userInfo[QuantizedTensorCoding.deviceKey] = QuantizedTensorCoding
+      .DeviceBox(device: device)
 
     return try decoder.decode(QuantizedTensor.self, from: data)
   }
