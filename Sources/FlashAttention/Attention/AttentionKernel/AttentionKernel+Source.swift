@@ -121,8 +121,7 @@ public extension AttentionKernel {
     let sourceURL = URL(fileURLWithPath: "/tmp/quantized_attention_kernel.metal")
     do {
       try source.write(to: sourceURL, atomically: true, encoding: .utf8)
-    } catch {
-    }
+    } catch {}
 
     return source
   }
@@ -134,7 +133,7 @@ extension AttentionKernel {
   func createBufferOffsets() -> String {
     switch type {
     case .forward:
-      return """
+      """
       Q = Q + q_batch_head_offset;
       K = K + kv_batch_head_offset;
       V = V + kv_batch_head_offset;
@@ -142,7 +141,7 @@ extension AttentionKernel {
       L = L + (batch_id * num_heads + head_id) * sequence_length;
       """
     case .backwardQuery:
-      return """
+      """
       Q = Q + q_batch_head_offset;
       K = K + kv_batch_head_offset;
       V = V + kv_batch_head_offset;
@@ -153,7 +152,7 @@ extension AttentionKernel {
       D = D + (batch_id * num_heads + head_id) * sequence_length;
       """
     case .backwardKeyValue:
-      return """
+      """
       Q = Q + q_batch_head_offset;
       K = K + kv_batch_head_offset;
       V = V + kv_batch_head_offset;
@@ -179,10 +178,11 @@ extension AttentionKernel {
     constant uint WINDOW_SIZE [[function_constant(3)]];
     constant bool IS_CAUSAL [[function_constant(4)]];
 
-    // Blockwise quantization constants
-    constant bool HAS_BLOCKWISE_A [[function_constant(5)]];
-    constant bool HAS_BLOCKWISE_B [[function_constant(6)]];
-    constant uint BLOCK_SIZE_K [[function_constant(7)]];
+    // Blockwise quantization constants per operand
+    constant bool HAS_BLOCKWISE_Q [[function_constant(5)]];
+    constant bool HAS_BLOCKWISE_K [[function_constant(6)]];
+    constant bool HAS_BLOCKWISE_V [[function_constant(7)]];
+    constant uint BLOCK_SIZE_K [[function_constant(8)]];
 
     """
   }
@@ -224,88 +224,48 @@ extension AttentionKernel {
       output += "  " + line + "\n"
     }
 
-    // Second pass: quantization parameters for quantized operands
+    // Second pass: per-tensor quantization parameters for quantized operands.
+    // Only scale and zero_point are consumed by the dequantizing load path
+    // (see AttentionKernel+Accumulate.swift). strategy / strategy_version are
+    // kept on the Swift QuantizationParameters struct only — emitting them as
+    // Metal buffers wastes scarce buffer slots (Metal caps at index 30).
     for operand in operands where isQuantized(operand) {
       let operandName = "\(operand)".lowercased()
 
-      // Scale parameter
       output += "  constant float &\(operandName)_scale [[buffer(\(currentBufferIndex))]], \n"
       currentBufferIndex += 1
 
-      // Zero point parameter
       output +=
         "  constant int32_t &\(operandName)_zero_point [[buffer(\(currentBufferIndex))]], \n"
       currentBufferIndex += 1
-
-      // Quantization strategy selector
-      output +=
-        "  constant uint &\(operandName)_strategy [[buffer(\(currentBufferIndex))]], \n"
-      currentBufferIndex += 1
-
-      // Quantization strategy version for forward compatibility
-      output +=
-        "  constant uint &\(operandName)_strategy_version [[buffer(\(currentBufferIndex))]], \n"
-      currentBufferIndex += 1
     }
 
-    // Third pass: blockwise quantization parameters for quantized operands
+    // Third pass: blockwise quantization parameters for quantized operands.
+    // block_scales / block_zero_points are consumed by the inner loop's
+    // per-block scale lookup. precomputed_sums has no live consumer and is
+    // omitted to conserve buffer slots.
     for operand in operands where isQuantized(operand) {
       let operandName = "\(operand)".lowercased()
 
-      // Block scales buffer (for per-block quantization)
-      output += "  device const float* \(operandName)_block_scales [[buffer(\(currentBufferIndex))]], \n"
+      output +=
+        "  device const float* \(operandName)_block_scales [[buffer(\(currentBufferIndex))]], \n"
       currentBufferIndex += 1
 
-      // Block zero points buffer (for per-block quantization)
-      output += "  device const int32_t* \(operandName)_block_zero_points [[buffer(\(currentBufferIndex))]], \n"
+      output +=
+        "  device const int32_t* \(operandName)_block_zero_points [[buffer(\(currentBufferIndex))]], \n"
       currentBufferIndex += 1
-
-      // Precomputed sums buffer (optional, mainly for weights)
-      output += "  device const float* \(operandName)_precomputed_sums [[buffer(\(currentBufferIndex))]], \n"
-      currentBufferIndex += 1
-    }
-
-    // Add dummy parameters for operands that are actually referenced in quantization code
-    // This is based on the accumulation patterns in AttentionKernel+Accumulate.swift
-    let definitelyNeededOperands: [AttentionOperand] = []
-
-    // Add P and V since they are used in the accumulate code (P*V -> O)
-    if operands.contains(.V) && !operands.contains(where: { $0 == .V && isQuantized($0) }) {
-      output += "  device const float* v_block_scales [[buffer(\(currentBufferIndex))]], \n"
-      currentBufferIndex += 1
-      output += "  device const int32_t* v_block_zero_points [[buffer(\(currentBufferIndex))]], \n"
-      currentBufferIndex += 1
-      output += "  device const float* v_precomputed_sums [[buffer(\(currentBufferIndex))]], \n"
-      currentBufferIndex += 1
-    }
-
-    // P is always referenced in accumulate code but never in operands (internal matrix)
-    output += "  device const float* p_block_scales [[buffer(\(currentBufferIndex))]], \n"
-    currentBufferIndex += 1
-    output += "  device const int32_t* p_block_zero_points [[buffer(\(currentBufferIndex))]], \n"
-    currentBufferIndex += 1
-    output += "  device const float* p_precomputed_sums [[buffer(\(currentBufferIndex))]], \n"
-    currentBufferIndex += 1
-
-    // Add other operands that might be used in backward passes
-    let backwardOperands: [AttentionOperand] = [.K, .dS, .dO, .dV, .dP, .dK, .dQ]
-    for operand in backwardOperands {
-      if operands.contains(operand) && !operands.contains(where: { $0 == operand && isQuantized($0) }) {
-        let operandName = "\(operand)".lowercased()
-        output += "  device const float* \(operandName)_block_scales [[buffer(\(currentBufferIndex))]], \n"
-        currentBufferIndex += 1
-        output += "  device const int32_t* \(operandName)_block_zero_points [[buffer(\(currentBufferIndex))]], \n"
-        currentBufferIndex += 1
-        output += "  device const float* \(operandName)_precomputed_sums [[buffer(\(currentBufferIndex))]], \n"
-        currentBufferIndex += 1
-      }
     }
 
     // Fourth pass: stride information for handling non-contiguous tensors
     // Add stride buffers for Q, K, V, O tensors to support PyTorch non-contiguous layouts
-    let stridedOperands = [AttentionOperand.Q, AttentionOperand.K, AttentionOperand.V, AttentionOperand.O]
+    let stridedOperands = [
+      AttentionOperand.Q,
+      AttentionOperand.K,
+      AttentionOperand.V,
+      AttentionOperand.O,
+    ]
     for operand in stridedOperands {
-      if !operands.contains(operand) && operand != .O {
+      if !operands.contains(operand), operand != .O {
         continue
       }
 
@@ -324,8 +284,6 @@ extension AttentionKernel {
     currentBufferIndex += 1
 
     output += "  device float *mask_buffer [[buffer(\(currentBufferIndex))]], \n"
-    currentBufferIndex += 1
-    output += "  constant uint &has_mask [[buffer(\(currentBufferIndex))]], \n"
     currentBufferIndex += 1
 
     return output

@@ -190,16 +190,37 @@ extension AttentionKernel {
     return memoryPrecision == .INT8 || memoryPrecision == .INT4
   }
 
+  func blockwiseConstant(_ operand: AttentionOperand) -> String {
+    switch operand {
+    case .Q, .dQ:
+      "HAS_BLOCKWISE_Q"
+    case .K, .dK:
+      "HAS_BLOCKWISE_K"
+    case .V, .dV:
+      "HAS_BLOCKWISE_V"
+    default:
+      "false"
+    }
+  }
+
   func loadCall(
-    _ operand: AttentionOperand, src: String, leadingDim: String, origin: String, transpose: String
+    _ operand: AttentionOperand,
+    src: String,
+    leadingDim: String,
+    origin: String,
+    transpose: String,
+    scaleIdentifier: String? = nil,
+    zeroPointIdentifier: String? = nil
   )
     -> String
   {
     if isQuantized(operand) {
       // For quantized operands, we need to include scale and zero_point parameters
       let operandName = "\(operand)".lowercased()
+      let scale = scaleIdentifier ?? "\(operandName)_scale"
+      let zeroPoint = zeroPointIdentifier ?? "\(operandName)_zero_point"
       return
-        "\(loadFunction(operand))(\n              \(src), \(leadingDim),\n              \(origin), \(operandName)_scale, \(operandName)_zero_point, \(transpose))"
+        "\(loadFunction(operand))(\n              \(src), \(leadingDim),\n              \(origin), \(scale), \(zeroPoint), \(transpose))"
     } else {
       // For non-quantized operands, use the standard parameters
       return

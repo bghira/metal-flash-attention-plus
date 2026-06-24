@@ -40,7 +40,6 @@ public class QuantizedAttention {
     public init() {}
   }
 
-
   /// Quantized attention descriptor that extends AttentionDescriptor
   public struct QuantizedAttentionDescriptor {
     /// Base attention descriptor
@@ -63,7 +62,6 @@ public class QuantizedAttention {
       descriptor.memoryPrecisions[.K] = quantizationConfig.keyPrecision
       descriptor.memoryPrecisions[.V] = quantizationConfig.valuePrecision
 
-
       // Set register precisions to FP32 for quantized inputs
       if quantizationConfig.queryPrecision.requiresQuantizationParameters {
         descriptor.registerPrecisions[.Q] = .FP32
@@ -75,15 +73,14 @@ public class QuantizedAttention {
         descriptor.registerPrecisions[.V] = .FP32
       }
 
-
       return descriptor
     }
   }
 
   private let device: MTLDevice
-  private let commandQueue: MTLCommandQueue?  // Make optional to handle cleanup safely
+  private let commandQueue: MTLCommandQueue? // Make optional to handle cleanup safely
   private var pipelineCache: [String: MTLComputePipelineState] = [:]
-  private var isDisposed: Bool = false  // Track disposal state
+  private var isDisposed: Bool = false // Track disposal state
 
   public init(device: MTLDevice) {
     self.device = device
@@ -97,13 +94,11 @@ public class QuantizedAttention {
   private func dispose() {
     guard !isDisposed else { return }
 
-
     // Clear pipeline cache safely
     pipelineCache.removeAll()
 
     // Mark as disposed to prevent double-cleanup
     isDisposed = true
-
   }
 
   /// Swift deinitializer with defensive guards
@@ -128,9 +123,10 @@ public class QuantizedAttention {
   )
     -> MTLCommandBuffer?
   {
-
-    guard !isDisposed, let queue = commandQueue,
-          let commandBuffer = queue.makeCommandBuffer() else {
+    guard
+      !isDisposed, let queue = commandQueue,
+      let commandBuffer = queue.makeCommandBuffer()
+    else {
       print("Error: Failed to create command buffer (disposed: \(isDisposed))")
       return nil
     }
@@ -140,7 +136,13 @@ public class QuantizedAttention {
     let kernel = AttentionKernel(descriptor: kernelDescriptor)
 
     // Create pipeline state for quantized attention
-    guard let pipelineState = getOrCreatePipelineState(for: kernel, descriptor: descriptor) else {
+    guard
+      let pipelineState = getOrCreatePipelineState(
+        for: kernel,
+        descriptor: descriptor,
+        operands: (query, key, value)
+      )
+    else {
       print("Error: Failed to create pipeline state")
       return nil
     }
@@ -155,74 +157,60 @@ public class QuantizedAttention {
     let threadgroupMemoryLength = Int(kernel.threadgroupMemoryAllocation)
     encoder.setThreadgroupMemoryLength(threadgroupMemoryLength, index: 0)
 
-    // Set tensor buffers
+    // Bind buffers in the exact order produced by
+    // AttentionKernel.createBufferBindings():
+    //   Q@0 K@1 V@2 O@3 L@4
+    //   per quantized operand (Q,K,V order): scale, zero_point
+    //   per quantized operand: block_scales, block_zero_points
+    //   q/k/v/o strides, then num_heads/num_kv_heads/head_dim/seq_len, then mask
+    // Strides/multi-head/mask are left null so the kernel runs in its proven
+    // single-head contiguous mode (the same path SquareAttentionTest validates).
     encoder.setBuffer(query.data, offset: 0, index: 0)
     encoder.setBuffer(key.data, offset: 0, index: 1)
     encoder.setBuffer(value.data, offset: 0, index: 2)
     encoder.setBuffer(output, offset: 0, index: 3)
 
+    let dims = descriptor.baseDescriptor.matrixDimensions!
+    let sequenceLength = UInt32(dims.row)
 
-    // Set quantization parameters
-    var bufferIndex = 4
+    // L (logsumexp) is always written by the forward kernel.
+    let logsumexpBuffer = device.makeBuffer(
+      length: Int(sequenceLength) * MemoryLayout<Float>.size,
+      options: .storageModePrivate
+    )
+    encoder.setBuffer(logsumexpBuffer, offset: 0, index: 4)
 
-    func encodeQuantizationParameters(_ parameters: QuantizationParameters) {
-      var scale = parameters.scale
-      var zeroPoint = parameters.zeroPoint
-      var strategy = UInt32(parameters.strategy.rawValue)
-      var strategyVersion = UInt32(parameters.strategyVersion)
+    // Quantized operands in Q, K, V order (matches the kernel's bufferBinding sort).
+    let quantOperands: [QuantizedTensor] = [query, key, value]
+      .filter(\.parameters.precision.requiresQuantizationParameters)
 
+    var bufferIndex = 5
+    for operand in quantOperands {
+      var scale = operand.parameters.scale
+      var zeroPoint = Int32(operand.parameters.zeroPoint)
       encoder.setBytes(&scale, length: MemoryLayout<Float>.size, index: bufferIndex)
       bufferIndex += 1
-
       encoder.setBytes(&zeroPoint, length: MemoryLayout<Int32>.size, index: bufferIndex)
       bufferIndex += 1
-
-      encoder.setBytes(&strategy, length: MemoryLayout<UInt32>.size, index: bufferIndex)
+    }
+    for operand in quantOperands {
+      // Per-block buffers are optional; null makes the kernel use per-tensor scale.
+      encoder.setBuffer(operand.blockScales, offset: 0, index: bufferIndex)
       bufferIndex += 1
-
-      encoder.setBytes(
-        &strategyVersion,
-        length: MemoryLayout<UInt32>.size,
-        index: bufferIndex
-      )
+      encoder.setBuffer(operand.blockZeroPoints, offset: 0, index: bufferIndex)
       bufferIndex += 1
     }
-
-    if query.parameters.precision.requiresQuantizationParameters {
-      encodeQuantizationParameters(query.parameters)
-    } else {
-    }
-
-    if key.parameters.precision.requiresQuantizationParameters {
-      encodeQuantizationParameters(key.parameters)
-    } else {
-    }
-
-    if value.parameters.precision.requiresQuantizationParameters {
-      encodeQuantizationParameters(value.parameters)
-    } else {
-    }
-
-    // Set matrix dimensions
-    let dims = descriptor.baseDescriptor.matrixDimensions!
-    var M = UInt32(dims.row)
-    var N = UInt32(dims.column)
-    var K = UInt32(dims.head)
-
-    encoder.setBytes(&M, length: MemoryLayout<UInt32>.size, index: bufferIndex)
-    encoder.setBytes(&N, length: MemoryLayout<UInt32>.size, index: bufferIndex + 1)
-    encoder.setBytes(&K, length: MemoryLayout<UInt32>.size, index: bufferIndex + 2)
 
     // Use proper threadgroup configuration from AttentionKernel
     let kernelThreadgroupSize = Int(kernel.threadgroupSize)
     let blockParallelization = Int(kernel.blockDimensions.parallelization)
 
-
-    // Flash attention kernel expects specific dispatch configuration
+    // Grid covers the full row (query) dimension: one threadgroup per
+    // parallelization tile. (The previous formula collapsed to a single
+    // threadgroup regardless of sequence length, so only one tile ran.)
+    let blockCount = (Int(sequenceLength) + blockParallelization - 1) / blockParallelization
     let threadgroupSize = MTLSize(width: kernelThreadgroupSize, height: 1, depth: 1)
-    let numThreadgroups = (blockParallelization + Int(kernel.blockDimensions.parallelization) - 1) / Int(kernel.blockDimensions.parallelization)
-    let gridSize = MTLSize(width: numThreadgroups, height: 1, depth: 1)
-
+    let gridSize = MTLSize(width: blockCount, height: 1, depth: 1)
 
     encoder.dispatchThreadgroups(gridSize, threadsPerThreadgroup: threadgroupSize)
     encoder.endEncoding()
@@ -257,8 +245,9 @@ public class QuantizedAttention {
     targetQuantization: GEMMOperandPrecision,
     quantizationMode: QuantizationMode = .tensorWise,
     descriptor: QuantizedAttentionDescriptor
-  ) -> MTLCommandBuffer? {
-
+  )
+    -> MTLCommandBuffer?
+  {
     guard !isDisposed, let _ = commandQueue else {
       print("Error: Failed to access command queue (disposed: \(isDisposed))")
       return nil
@@ -323,9 +312,10 @@ public class QuantizedAttention {
     targetQuantization: GEMMOperandPrecision,
     quantizationMode: QuantizationMode = .tensorWise,
     descriptor: QuantizedAttentionDescriptor
-  ) -> MTLCommandBuffer? {
-
-    return forward(
+  )
+    -> MTLCommandBuffer?
+  {
+    forward(
       queryBuffer: queryBuffer,
       keyBuffer: keyBuffer,
       valueBuffer: valueBuffer,
@@ -350,8 +340,9 @@ public class QuantizedAttention {
     targetPrecision: GEMMOperandPrecision,
     quantizationMode: QuantizationMode,
     targetStrategy: QuantizationStrategy
-  ) -> QuantizedTensor {
-
+  )
+    -> QuantizedTensor
+  {
     let elementCount = shape.reduce(1, *)
 
     // If target precision doesn't require quantization, wrap existing buffer
@@ -373,16 +364,20 @@ public class QuantizedAttention {
     }
 
     // Use fused quantization for symmetric blockwise quantization
-    if targetStrategy == .symmetric,
-       case .blockwise(let blockSizeK, _) = quantizationMode,
-       targetPrecision == .INT8 {
+    if
+      targetStrategy == .symmetric,
+      case let .blockwise(blockSizeK, _) = quantizationMode,
+      targetPrecision == .INT8
+    {
       do {
         // Initialize the runtime quantization utility
         let runtimeQuantizer = try GEMMRuntimeQuantization(device: device)
 
         // Create command buffer for fused quantization
-        guard let commandQueue = device.makeCommandQueue(),
-              let commandBuffer = commandQueue.makeCommandBuffer() else {
+        guard
+          let commandQueue = device.makeCommandQueue(),
+          let commandBuffer = commandQueue.makeCommandBuffer()
+        else {
           fatalError("Could not create Metal command queue or command buffer")
         }
 
@@ -425,8 +420,10 @@ public class QuantizedAttention {
     }
 
     // Create quantized buffer
-    let bufferSize = targetPrecision == .INT4 ? (elementCount + 1) / 2 : elementCount * targetPrecision.size
-    guard let quantizedBuffer = device.makeBuffer(length: bufferSize, options: .storageModeShared) else {
+    let bufferSize = targetPrecision == .INT4 ? (elementCount + 1) / 2 : elementCount *
+      targetPrecision.size
+    guard let quantizedBuffer = device.makeBuffer(length: bufferSize, options: .storageModeShared)
+    else {
       fatalError("Could not create quantized buffer")
     }
 
@@ -454,8 +451,9 @@ public class QuantizedAttention {
     buffer: MTLBuffer,
     elementCount: Int,
     inputPrecision: GEMMOperandPrecision
-  ) -> [Float] {
-
+  )
+    -> [Float]
+  {
     var floatData = [Float](repeating: 0, count: elementCount)
     let bufferContents = buffer.contents()
 
@@ -507,12 +505,39 @@ public class QuantizedAttention {
   }
 
   private func getOrCreatePipelineState(
-    for kernel: AttentionKernel, descriptor: QuantizedAttentionDescriptor
+    for kernel: AttentionKernel,
+    descriptor: QuantizedAttentionDescriptor,
+    operands: (query: QuantizedTensor, key: QuantizedTensor, value: QuantizedTensor)
   )
     -> MTLComputePipelineState?
   {
     let source = kernel.createSource()
-    let cacheKey = String(source.hashValue)
+    func isBlockwise(_ tensor: QuantizedTensor) -> Bool {
+      if case .blockwise = tensor.parameters.mode {
+        return true
+      }
+      return false
+    }
+
+    let queryBlockwise = isBlockwise(operands.query) && operands.query.blockScales != nil
+    if queryBlockwise {
+      print(
+        "Warning: Blockwise quantization for query tensors is not yet supported; falling back to per-tensor scaling."
+      )
+    }
+    var hasBlockwiseQ = false
+    var hasBlockwiseK = isBlockwise(operands.key) && operands.key.blockScales != nil
+    var hasBlockwiseV = isBlockwise(operands.value) && operands.value.blockScales != nil
+
+    var blockSize = operands.key.blockSizeK ?? operands.value.blockSizeK ?? operands.query
+      .blockSizeK ?? 0
+    if blockSize == 0 {
+      blockSize = 1
+    }
+    var blockSizeUInt = UInt32(blockSize)
+
+    let cacheKey =
+      "\(source.hashValue)_\(hasBlockwiseQ ? 1 : 0)_\(hasBlockwiseK ? 1 : 0)_\(hasBlockwiseV ? 1 : 0)_\(blockSizeUInt)"
 
     // Clear cache to force regeneration for debugging
     pipelineCache.removeAll()
@@ -526,6 +551,10 @@ public class QuantizedAttention {
 
       let functionConstants = MTLFunctionConstantValues()
       descriptor.baseDescriptor.setFunctionConstants(functionConstants)
+      functionConstants.setConstantValue(&hasBlockwiseQ, type: .bool, index: 5)
+      functionConstants.setConstantValue(&hasBlockwiseK, type: .bool, index: 6)
+      functionConstants.setConstantValue(&hasBlockwiseV, type: .bool, index: 7)
+      functionConstants.setConstantValue(&blockSizeUInt, type: .uint, index: 8)
 
       // DEBUG: Check function constants after setting
 
@@ -557,17 +586,38 @@ extension QuantizedAttention.Configuration: Codable {
   public init(from decoder: Decoder) throws {
     let container = try decoder.container(keyedBy: CodingKeys.self)
 
-    queryPrecision = try container.decodeIfPresent(GEMMOperandPrecision.self, forKey: .queryPrecision) ?? .FP16
-    keyPrecision = try container.decodeIfPresent(GEMMOperandPrecision.self, forKey: .keyPrecision) ?? .INT8
-    valuePrecision = try container.decodeIfPresent(GEMMOperandPrecision.self, forKey: .valuePrecision) ?? .INT8
+    queryPrecision = try container.decodeIfPresent(
+      GEMMOperandPrecision.self,
+      forKey: .queryPrecision
+    ) ?? .FP16
+    keyPrecision = try container
+      .decodeIfPresent(GEMMOperandPrecision.self, forKey: .keyPrecision) ?? .INT8
+    valuePrecision = try container.decodeIfPresent(
+      GEMMOperandPrecision.self,
+      forKey: .valuePrecision
+    ) ?? .INT8
 
-    queryStrategy = try container.decodeIfPresent(QuantizationStrategy.self, forKey: .queryStrategy) ?? .legacy
-    keyStrategy = try container.decodeIfPresent(QuantizationStrategy.self, forKey: .keyStrategy) ?? .legacy
-    valueStrategy = try container.decodeIfPresent(QuantizationStrategy.self, forKey: .valueStrategy) ?? .legacy
-    strategyVersion = try container.decodeIfPresent(UInt8.self, forKey: .strategyVersion) ?? QuantizationStrategy.currentVersion
+    queryStrategy = try container.decodeIfPresent(
+      QuantizationStrategy.self,
+      forKey: .queryStrategy
+    ) ?? .legacy
+    keyStrategy = try container
+      .decodeIfPresent(QuantizationStrategy.self, forKey: .keyStrategy) ?? .legacy
+    valueStrategy = try container.decodeIfPresent(
+      QuantizationStrategy.self,
+      forKey: .valueStrategy
+    ) ?? .legacy
+    strategyVersion = try container
+      .decodeIfPresent(UInt8.self, forKey: .strategyVersion) ?? QuantizationStrategy.currentVersion
 
-    mixedPrecisionIntermediates = try container.decodeIfPresent(Bool.self, forKey: .mixedPrecisionIntermediates) ?? true
-    quantizationParameters = try container.decodeIfPresent([String: QuantizationParameters].self, forKey: .quantizationParameters) ?? [:]
+    mixedPrecisionIntermediates = try container.decodeIfPresent(
+      Bool.self,
+      forKey: .mixedPrecisionIntermediates
+    ) ?? true
+    quantizationParameters = try container.decodeIfPresent(
+      [String: QuantizationParameters].self,
+      forKey: .quantizationParameters
+    ) ?? [:]
   }
 
   public func encode(to encoder: Encoder) throws {
@@ -598,7 +648,7 @@ public extension QuantizedAttention {
   ///   - quantizeTo: Target quantization (INT8 or INT4)
   ///   - mode: Quantization granularity mode
   /// - Returns: Command buffer for execution
-  public func forwardWithRuntimeQuantization(
+  func forwardWithRuntimeQuantization(
     queryBuffer: MTLBuffer,
     keyBuffer: MTLBuffer,
     valueBuffer: MTLBuffer,
@@ -607,8 +657,9 @@ public extension QuantizedAttention {
     inputFormat: GEMMOperandPrecision = .FP16,
     quantizeTo: GEMMOperandPrecision = .INT8,
     mode: QuantizationMode = .tensorWise
-  ) -> MTLCommandBuffer? {
-
+  )
+    -> MTLCommandBuffer?
+  {
     // Create default attention descriptor
     var baseDescriptor = AttentionDescriptor()
     guard shape.count >= 3 else {
@@ -824,21 +875,29 @@ public extension QuantizedAttention {
 // MARK: - Quantized Backward Pass Implementation
 
 extension QuantizedAttention {
-  /// Perform quantized attention backward pass for query gradients
+  /// Perform quantized attention backward pass for query gradients.
+  ///
+  /// This dispatches the *same* core `AttentionKernel` (type `.backwardQuery`)
+  /// that `SquareAttentionTest` validates against a CPU reference at 2e-5. INT8
+  /// operands are dequantized on load inside the kernel, so quantization is
+  /// handled exactly as in the forward path.
+  ///
   /// - Parameters:
-  ///   - query: Quantized query tensor (INT8)
-  ///   - key: Key tensor (can be FP16 or quantized)
-  ///   - value: Value tensor (can be FP16 or quantized)
-  ///   - gradOutput: Output gradients (FP32)
-  ///   - logsumexp: Logsumexp values from forward pass (FP32)
-  ///   - gradQuery: Output buffer for query gradients (FP32)
-  ///   - dValues: Output buffer for D intermediate values (FP32)
+  ///   - query: Quantized query tensor
+  ///   - key: Key operand (QuantizedTensor or raw MTLBuffer)
+  ///   - value: Value operand (QuantizedTensor or raw MTLBuffer)
+  ///   - output: Forward output O — required because the kernel computes D = dO·O
+  ///   - gradOutput: Output gradients dO (FP32)
+  ///   - logsumexp: Logsumexp L from the forward pass (FP32)
+  ///   - gradQuery: Output buffer for dQ (FP32)
+  ///   - dValues: Output buffer for the D intermediate (FP32)
   ///   - descriptor: Quantized attention configuration
   /// - Returns: Command buffer for execution
   public func backwardQuery(
     query: QuantizedTensor,
-    key: QuantizedTensor,
-    value: QuantizedTensor,
+    key: Any,
+    value: Any,
+    output: MTLBuffer,
     gradOutput: MTLBuffer,
     logsumexp: MTLBuffer,
     gradQuery: MTLBuffer,
@@ -847,88 +906,65 @@ extension QuantizedAttention {
   )
     -> MTLCommandBuffer?
   {
-    guard !isDisposed, let queue = commandQueue,
-          let commandBuffer = queue.makeCommandBuffer() else {
-      print("Error: Failed to create command buffer for backward query (disposed: \(isDisposed))")
-      return nil
-    }
-
-    // Generate quantized backward query kernel
-    let source = generateQuantizedBackwardQueryKernel(descriptor: descriptor)
-
     guard
-      let pipelineState = createQuantizedBackwardPipeline(
-        source: source, functionName: "quantized_backward_query"
-      )
+      !isDisposed, let queue = commandQueue,
+      let commandBuffer = queue.makeCommandBuffer(),
+      let keyBinding = makeBinding(for: key, label: "key"),
+      let valueBinding = makeBinding(for: value, label: "value"),
+      let dims = descriptor.baseDescriptor.matrixDimensions,
+      let core = getOrCreateCorePipeline(type: .backwardQuery, descriptor: descriptor),
+      let encoder = commandBuffer.makeComputeCommandEncoder()
     else {
-      print("Error: Failed to create pipeline state for backward query")
+      print("Error: Failed to set up backward query")
       return nil
     }
 
-    guard let encoder = commandBuffer.makeComputeCommandEncoder() else {
-      return nil
-    }
+    encoder.setComputePipelineState(core.pipeline)
+    encoder.setThreadgroupMemoryLength(Int(core.kernel.threadgroupMemoryAllocation), index: 0)
 
-    encoder.setComputePipelineState(pipelineState)
+    // Operands (AttentionKernel.createBufferBindings, single-head layout):
+    //   Q@0 K@1 V@2 O@3 L@4 D@5 dO@6 ... dQ@9
+    // Strides / multi-head / mask are left unset → null → single-head mode.
+    encoder.setBuffer(query.data, offset: 0, index: 0)
+    encoder.setBuffer(keyBinding.buffer, offset: 0, index: 1)
+    encoder.setBuffer(valueBinding.buffer, offset: 0, index: 2)
+    encoder.setBuffer(output, offset: 0, index: 3)
+    encoder.setBuffer(logsumexp, offset: 0, index: 4)
+    encoder.setBuffer(dValues, offset: 0, index: 5)
+    encoder.setBuffer(gradOutput, offset: 0, index: 6)
+    encoder.setBuffer(gradQuery, offset: 0, index: 9)
 
-    // Set buffers
-    encoder.setBuffer(query.data, offset: 0, index: 0) // Q_quantized
-    encoder.setBuffer(key.data, offset: 0, index: 1) // K
-    encoder.setBuffer(value.data, offset: 0, index: 2) // V
-    encoder.setBuffer(gradOutput, offset: 0, index: 3) // dO
-    encoder.setBuffer(logsumexp, offset: 0, index: 4) // L
-    encoder.setBuffer(gradQuery, offset: 0, index: 5) // dQ
-    encoder.setBuffer(dValues, offset: 0, index: 6) // D
-
-    // Set quantization parameters
-    var qScale = query.parameters.scale
-    var qZeroPoint = query.parameters.zeroPoint
-    var qStrategy = UInt32(query.parameters.strategy.rawValue)
-    var qStrategyVersion = UInt32(query.parameters.strategyVersion)
-    encoder.setBytes(&qScale, length: MemoryLayout<Float>.size, index: 7)
-    encoder.setBytes(&qZeroPoint, length: MemoryLayout<Int32>.size, index: 8)
-    encoder.setBytes(&qStrategy, length: MemoryLayout<UInt32>.size, index: 9)
-    encoder.setBytes(&qStrategyVersion, length: MemoryLayout<UInt32>.size, index: 10)
-
-    // Set matrix dimensions
-    let dims = descriptor.baseDescriptor.matrixDimensions!
-    var dimensions = (UInt32(dims.row), UInt32(dims.column), UInt32(dims.head))
-    encoder.setBytes(&dimensions, length: MemoryLayout.size(ofValue: dimensions), index: 11)
-
-    // Set STE clip range
-    var steClipRange: Float = 6.0
-    encoder.setBytes(&steClipRange, length: MemoryLayout<Float>.size, index: 12)
-
-    // Calculate thread groups
-    let threadgroupSize = MTLSize(width: 8, height: 8, depth: 1)
-    let gridSize = MTLSize(
-      width: (Int(dims.head) + threadgroupSize.width - 1) / threadgroupSize.width,
-      height: (Int(dims.row) + threadgroupSize.height - 1) / threadgroupSize.height,
-      depth: 1
+    // Per-tensor scale/zero for quantized Q/K/V (blockwise left null).
+    bindQuantParams(
+      encoder, query: query, key: keyBinding, value: valueBinding,
+      config: descriptor.quantizationConfig, startingAt: 10
     )
 
-    encoder.dispatchThreadgroups(gridSize, threadsPerThreadgroup: threadgroupSize)
+    dispatchBackward(encoder, kernel: core.kernel, parallelizationDim: Int(dims.row))
     encoder.endEncoding()
-
     return commandBuffer
   }
 
-  /// Perform quantized attention backward pass for key and value gradients
+  /// Perform quantized attention backward pass for key and value gradients.
+  ///
+  /// Dispatches the core `AttentionKernel` (type `.backwardKeyValue`), reusing
+  /// the proven-correct backward implementation.
+  ///
   /// - Parameters:
-  ///   - query: Quantized query tensor (INT8)
-  ///   - key: Quantized key tensor (INT8)
-  ///   - value: Quantized value tensor (INT8)
-  ///   - gradOutput: Output gradients (FP32)
-  ///   - logsumexp: Logsumexp values from forward pass (FP32)
-  ///   - dValues: D intermediate values from backward query (FP32)
-  ///   - gradKey: Output buffer for key gradients (FP32)
-  ///   - gradValue: Output buffer for value gradients (FP32)
+  ///   - query: Quantized query tensor
+  ///   - key: Key operand (QuantizedTensor or raw MTLBuffer)
+  ///   - value: Value operand (QuantizedTensor or raw MTLBuffer)
+  ///   - gradOutput: Output gradients dO (FP32)
+  ///   - logsumexp: Logsumexp L from the forward pass (FP32)
+  ///   - dValues: D intermediate from `backwardQuery` (FP32)
+  ///   - gradKey: Output buffer for dK (FP32)
+  ///   - gradValue: Output buffer for dV (FP32)
   ///   - descriptor: Quantized attention configuration
   /// - Returns: Command buffer for execution
   public func backwardKeyValue(
     query: QuantizedTensor,
-    key: QuantizedTensor,
-    value: QuantizedTensor,
+    key: Any,
+    value: Any,
     gradOutput: MTLBuffer,
     logsumexp: MTLBuffer,
     dValues: MTLBuffer,
@@ -938,329 +974,170 @@ extension QuantizedAttention {
   )
     -> MTLCommandBuffer?
   {
-    guard !isDisposed, let queue = commandQueue,
-          let commandBuffer = queue.makeCommandBuffer() else {
-      print("Error: Failed to create command buffer for backward key-value (disposed: \(isDisposed))")
-      return nil
-    }
-
-    // Generate quantized backward key-value kernel
-    let source = generateQuantizedBackwardKeyValueKernel(descriptor: descriptor)
-
     guard
-      let pipelineState = createQuantizedBackwardPipeline(
-        source: source, functionName: "quantized_backward_key_value"
-      )
+      !isDisposed, let queue = commandQueue,
+      let commandBuffer = queue.makeCommandBuffer(),
+      let keyBinding = makeBinding(for: key, label: "key"),
+      let valueBinding = makeBinding(for: value, label: "value"),
+      let dims = descriptor.baseDescriptor.matrixDimensions,
+      let core = getOrCreateCorePipeline(type: .backwardKeyValue, descriptor: descriptor),
+      let encoder = commandBuffer.makeComputeCommandEncoder()
     else {
-      print("Error: Failed to create pipeline state for backward key-value")
+      print("Error: Failed to set up backward key-value")
       return nil
     }
 
-    guard let encoder = commandBuffer.makeComputeCommandEncoder() else {
-      return nil
-    }
+    encoder.setComputePipelineState(core.pipeline)
+    encoder.setThreadgroupMemoryLength(Int(core.kernel.threadgroupMemoryAllocation), index: 0)
 
-    encoder.setComputePipelineState(pipelineState)
+    // Operands: Q@0 K@1 V@2 L@4 D@5 dO@6 dV@7 dK@8
+    encoder.setBuffer(query.data, offset: 0, index: 0)
+    encoder.setBuffer(keyBinding.buffer, offset: 0, index: 1)
+    encoder.setBuffer(valueBinding.buffer, offset: 0, index: 2)
+    encoder.setBuffer(logsumexp, offset: 0, index: 4)
+    encoder.setBuffer(dValues, offset: 0, index: 5)
+    encoder.setBuffer(gradOutput, offset: 0, index: 6)
+    encoder.setBuffer(gradValue, offset: 0, index: 7)
+    encoder.setBuffer(gradKey, offset: 0, index: 8)
 
-    // Set buffers
-    encoder.setBuffer(query.data, offset: 0, index: 0) // Q_quantized
-    encoder.setBuffer(key.data, offset: 0, index: 1) // K_quantized
-    encoder.setBuffer(value.data, offset: 0, index: 2) // V_quantized
-    encoder.setBuffer(gradOutput, offset: 0, index: 3) // dO
-    encoder.setBuffer(logsumexp, offset: 0, index: 4) // L
-    encoder.setBuffer(dValues, offset: 0, index: 5) // D
-    encoder.setBuffer(gradKey, offset: 0, index: 6) // dK
-    encoder.setBuffer(gradValue, offset: 0, index: 7) // dV
-
-    // Set quantization parameters for Q, K, V
-    var qScale = query.parameters.scale
-    var qZeroPoint = query.parameters.zeroPoint
-    var qStrategy = UInt32(query.parameters.strategy.rawValue)
-    var qStrategyVersion = UInt32(query.parameters.strategyVersion)
-    var kScale = key.parameters.scale
-    var kZeroPoint = key.parameters.zeroPoint
-    var kStrategy = UInt32(key.parameters.strategy.rawValue)
-    var kStrategyVersion = UInt32(key.parameters.strategyVersion)
-    var vScale = value.parameters.scale
-    var vZeroPoint = value.parameters.zeroPoint
-    var vStrategy = UInt32(value.parameters.strategy.rawValue)
-    var vStrategyVersion = UInt32(value.parameters.strategyVersion)
-
-    encoder.setBytes(&qScale, length: MemoryLayout<Float>.size, index: 8)
-    encoder.setBytes(&qZeroPoint, length: MemoryLayout<Int32>.size, index: 9)
-    encoder.setBytes(&qStrategy, length: MemoryLayout<UInt32>.size, index: 10)
-    encoder.setBytes(&qStrategyVersion, length: MemoryLayout<UInt32>.size, index: 11)
-    encoder.setBytes(&kScale, length: MemoryLayout<Float>.size, index: 12)
-    encoder.setBytes(&kZeroPoint, length: MemoryLayout<Int32>.size, index: 13)
-    encoder.setBytes(&kStrategy, length: MemoryLayout<UInt32>.size, index: 14)
-    encoder.setBytes(&kStrategyVersion, length: MemoryLayout<UInt32>.size, index: 15)
-    encoder.setBytes(&vScale, length: MemoryLayout<Float>.size, index: 16)
-    encoder.setBytes(&vZeroPoint, length: MemoryLayout<Int32>.size, index: 17)
-    encoder.setBytes(&vStrategy, length: MemoryLayout<UInt32>.size, index: 18)
-    encoder.setBytes(&vStrategyVersion, length: MemoryLayout<UInt32>.size, index: 19)
-
-    // Set matrix dimensions
-    let dims = descriptor.baseDescriptor.matrixDimensions!
-    var dimensions = (UInt32(dims.row), UInt32(dims.column), UInt32(dims.head))
-    encoder.setBytes(&dimensions, length: MemoryLayout.size(ofValue: dimensions), index: 20)
-
-    // Set STE clip range
-    var steClipRange: Float = 6.0
-    encoder.setBytes(&steClipRange, length: MemoryLayout<Float>.size, index: 21)
-
-    // Calculate thread groups
-    let threadgroupSize = MTLSize(width: 8, height: 8, depth: 1)
-    let gridSize = MTLSize(
-      width: (Int(dims.head) + threadgroupSize.width - 1) / threadgroupSize.width,
-      height: (Int(dims.column) + threadgroupSize.height - 1) / threadgroupSize.height,
-      depth: 1
+    bindQuantParams(
+      encoder, query: query, key: keyBinding, value: valueBinding,
+      config: descriptor.quantizationConfig, startingAt: 9
     )
 
-    encoder.dispatchThreadgroups(gridSize, threadsPerThreadgroup: threadgroupSize)
+    dispatchBackward(encoder, kernel: core.kernel, parallelizationDim: Int(dims.row))
     encoder.endEncoding()
-
     return commandBuffer
   }
 
   // MARK: - Private Helper Methods
 
-  private func createQuantizedBackwardPipeline(source: String, functionName: String)
-    -> MTLComputePipelineState?
+  /// Build the proven core `AttentionKernel` pipeline for the given type.
+  /// Per-tensor quantization only (HAS_BLOCKWISE_* = false); blockwise buffers
+  /// are emitted by the kernel but left null and never dereferenced.
+  private func getOrCreateCorePipeline(
+    type: AttentionKernelType,
+    descriptor: QuantizedAttentionDescriptor
+  )
+    -> (pipeline: MTLComputePipelineState, kernel: AttentionKernel)?
   {
-    let cacheKey = "\(functionName)_\(source.hashValue)"
+    let kernel = AttentionKernel(descriptor: descriptor.kernelDescriptor(type: type))
+    let source = kernel.createSource()
+    let cacheKey = "core_\(type)_\(source.hashValue)"
 
     if let cached = pipelineCache[cacheKey] {
-      return cached
+      return (cached, kernel)
     }
 
     do {
       let library = try device.makeLibrary(source: source, options: nil)
-      guard let function = library.makeFunction(name: functionName) else {
-        print("Error: Function '\(functionName)' not found in library")
-        return nil
-      }
-      let pipelineState = try device.makeComputePipelineState(function: function)
+      let functionConstants = MTLFunctionConstantValues()
+      descriptor.baseDescriptor.setFunctionConstants(functionConstants)
+      var bq = false
+      var bk = false
+      var bv = false
+      var blockSize: UInt32 = 1
+      functionConstants.setConstantValue(&bq, type: .bool, index: 5)
+      functionConstants.setConstantValue(&bk, type: .bool, index: 6)
+      functionConstants.setConstantValue(&bv, type: .bool, index: 7)
+      functionConstants.setConstantValue(&blockSize, type: .uint, index: 8)
 
+      let function = try library.makeFunction(name: "attention", constantValues: functionConstants)
+      let pipelineState = try device.makeComputePipelineState(function: function)
       pipelineCache[cacheKey] = pipelineState
-      return pipelineState
+      return (pipelineState, kernel)
     } catch {
-      print("Pipeline creation error for \(functionName): \(error)")
+      print("Pipeline creation error (\(type)): \(error)")
       return nil
     }
   }
 
-  private func generateQuantizedBackwardQueryKernel(descriptor _: QuantizedAttentionDescriptor)
-    -> String
-  {
-    """
-    #include <metal_stdlib>
-    using namespace metal;
-
-    // Vectorized dequantization helper
-    METAL_FUNC float4 dequantize_char4(char4 quantized, float scale, int32_t zero_point) {
-        int4 int_vals = int4(quantized);
-        return (float4(int_vals) - float(zero_point)) * scale;
+  /// Bind per-tensor (scale, zero_point) for the quantized operands among Q/K/V,
+  /// in bufferBinding order — mirroring `AttentionKernel.createBufferBindings`
+  /// pass 2. Blockwise buffers (pass 3) are left null (HAS_BLOCKWISE = false).
+  private func bindQuantParams(
+    _ encoder: MTLComputeCommandEncoder,
+    query: QuantizedTensor,
+    key: OperandBinding,
+    value: OperandBinding,
+    config: QuantizedAttention.Configuration,
+    startingAt start: Int
+  ) {
+    var index = start
+    func emit(_ scale: Float, _ zeroPoint: Int32) {
+      var scale = scale
+      encoder.setBytes(&scale, length: MemoryLayout<Float>.size, index: index)
+      index += 1
+      var zeroPoint = zeroPoint
+      encoder.setBytes(&zeroPoint, length: MemoryLayout<Int32>.size, index: index)
+      index += 1
     }
-
-    // Quantized backward pass: compute dQ
-    kernel void quantized_backward_query(
-        device const char *Q_quantized [[buffer(0)]],      // INT8 quantized query
-        device const half *K [[buffer(1)]],                // FP16 key
-        device const half *V [[buffer(2)]],                // FP16 value
-        device const float *dO [[buffer(3)]],              // FP32 output gradients
-        device const float *L [[buffer(4)]],               // FP32 logsumexp from forward
-        device float *dQ [[buffer(5)]],                    // FP32 query gradients
-        device float *D [[buffer(6)]],                     // FP32 intermediate D values
-        constant float &q_scale [[buffer(7)]],
-        constant int32_t &q_zero_point [[buffer(8)]],
-        constant uint3 &dims [[buffer(9)]],                // {M, N, K}
-        constant float &ste_clip_range [[buffer(10)]],
-        uint2 gid [[thread_position_in_grid]]
-    ) {
-        uint M = dims.x, N = dims.y, K_dim = dims.z;
-        uint row = gid.y, col = gid.x;
-
-        if (row >= M || col >= K_dim) return;
-
-        // Dequantize current query element
-        uint q_idx = row * K_dim + col;
-        char q_quantized = Q_quantized[q_idx];
-        float q_dequantized = (float(q_quantized) - float(q_zero_point)) * q_scale;
-
-        // Improved straight-through estimator based on 2024 research
-        // Research shows identity gradients (STE with Q'(x) = 1) work better than zeroing
-        float ste_gradient = 1.0f;  // Always use identity gradient
-
-        // Apply soft clipping to the gradient instead of hard zeroing
-        float clip_factor = 1.0f;
-        if (abs(q_dequantized) > ste_clip_range) {
-            // Soft attenuation instead of hard zero - reduces gradient sparsity
-            clip_factor = ste_clip_range / abs(q_dequantized);
-            clip_factor = max(clip_factor, 0.1f);  // Minimum 10% gradient flow
-        }
-
-        // Initialize gradient output to zero first
-        dQ[row * K_dim + col] = 0.0f;
-
-        // Simple and numerically stable gradient computation
-        // For prototype: use simplified backward computation to avoid numerical issues
-        float dq_accumulator = 0.0f;
-
-        // Compute a simple approximation for D (diagonal correction)
-        // D[i] ≈ sum(dO[i, :]) for numerical stability
-        float d_approx = 0.0f;
-        if (col == 0) {
-            for (uint k = 0; k < K_dim; k++) {
-                d_approx += dO[row * K_dim + k];
-            }
-            D[row] = d_approx / float(K_dim); // Normalize to prevent explosion
-        }
-
-        // Simple gradient computation: dQ ≈ dO * K^T (ignoring complex attention dynamics for stability)
-        for (uint n = 0; n < N; n++) {
-            // Compute a simple attention weight approximation
-            float qk_dot = 0.0f;
-            for (uint k = 0; k < K_dim; k++) {
-                float q_val = (float(Q_quantized[row * K_dim + k]) - float(q_zero_point)) * q_scale;
-                // Add small epsilon to prevent overflow
-                qk_dot += q_val * float(K[n * K_dim + k]);
-            }
-
-            // Use a stable softmax approximation
-            float max_val = max(qk_dot, -10.0f); // Clamp to prevent overflow
-            float min_val = min(max_val, 10.0f);  // Clamp to prevent underflow
-
-            float stable_logit = min_val - L[row];
-            float p_val = exp(stable_logit);
-
-            // Clamp attention weights to reasonable range
-            p_val = clamp(p_val, 0.0f, 1.0f);
-
-            // Simple gradient computation
-            float grad_factor = p_val * dO[row * K_dim + col];
-
-            // Scale down to prevent explosion
-            grad_factor *= 0.01f; // Stronger damping factor for numerical stability
-
-            dq_accumulator += grad_factor * float(K[n * K_dim + col]);
-        }
-
-        // Apply final clamping to prevent NaN/Inf
-        dq_accumulator = clamp(dq_accumulator, -10.0f, 10.0f);
-
-        // Apply improved straight-through estimator with soft clipping
-        dQ[row * K_dim + col] = dq_accumulator * ste_gradient * clip_factor;
+    if config.queryPrecision.requiresQuantizationParameters {
+      emit(query.parameters.scale, Int32(query.parameters.zeroPoint))
     }
-    """
+    if config.keyPrecision.requiresQuantizationParameters {
+      emit(key.scale, key.zeroPoint)
+    }
+    if config.valuePrecision.requiresQuantizationParameters {
+      emit(value.scale, value.zeroPoint)
+    }
   }
 
-  private func generateQuantizedBackwardKeyValueKernel(descriptor _: QuantizedAttentionDescriptor)
-    -> String
-  {
-    """
-    #include <metal_stdlib>
-    using namespace metal;
+  private func dispatchBackward(
+    _ encoder: MTLComputeCommandEncoder,
+    kernel: AttentionKernel,
+    parallelizationDim: Int
+  ) {
+    let blockParallelization = Int(kernel.blockDimensions.parallelization)
+    let blockCount = (parallelizationDim + blockParallelization - 1) / blockParallelization
+    let threadgroupSize = MTLSize(width: Int(kernel.threadgroupSize), height: 1, depth: 1)
+    let gridSize = MTLSize(width: blockCount, height: 1, depth: 1)
+    encoder.dispatchThreadgroups(gridSize, threadsPerThreadgroup: threadgroupSize)
+  }
 
-    // Vectorized dequantization helper
-    METAL_FUNC float4 dequantize_char4(char4 quantized, float scale, int32_t zero_point) {
-        int4 int_vals = int4(quantized);
-        return (float4(int_vals) - float(zero_point)) * scale;
+  private struct OperandBinding {
+    let buffer: MTLBuffer
+    let scale: Float
+    let zeroPoint: Int32
+    let precision: GEMMOperandPrecision
+    let shape: [Int]?
+    let blockScales: MTLBuffer?
+    let blockZeroPoints: MTLBuffer?
+    let precomputedSums: MTLBuffer?
+    let blockSize: Int?
+  }
+
+  private func makeBinding(for operand: Any, label: String) -> OperandBinding? {
+    if let tensor = operand as? QuantizedTensor {
+      let zeroPoint = Int32(tensor.parameters.zeroPoint)
+      return OperandBinding(
+        buffer: tensor.data,
+        scale: tensor.parameters.scale,
+        zeroPoint: zeroPoint,
+        precision: tensor.parameters.precision,
+        shape: tensor.originalShape,
+        blockScales: tensor.blockScales,
+        blockZeroPoints: tensor.blockZeroPoints,
+        precomputedSums: tensor.precomputedSums,
+        blockSize: tensor.blockSizeK
+      )
     }
 
-    // Quantized backward pass: compute dK and dV
-    kernel void quantized_backward_key_value(
-        device const char *Q_quantized [[buffer(0)]],      // INT8 quantized query
-        device const char *K_quantized [[buffer(1)]],      // INT8 quantized key
-        device const char *V_quantized [[buffer(2)]],      // INT8 quantized value
-        device const float *dO [[buffer(3)]],              // FP32 output gradients
-        device const float *L [[buffer(4)]],               // FP32 logsumexp from forward
-        device const float *D [[buffer(5)]],               // FP32 D values from backward_query
-        device float *dK [[buffer(6)]],                    // FP32 key gradients
-        device float *dV [[buffer(7)]],                    // FP32 value gradients
-        constant float &q_scale [[buffer(8)]],
-        constant int32_t &q_zero_point [[buffer(9)]],
-        constant float &k_scale [[buffer(10)]],
-        constant int32_t &k_zero_point [[buffer(11)]],
-        constant float &v_scale [[buffer(12)]],
-        constant int32_t &v_zero_point [[buffer(13)]],
-        constant uint3 &dims [[buffer(14)]],               // {M, N, K}
-        constant float &ste_clip_range [[buffer(15)]],
-        uint2 gid [[thread_position_in_grid]]
-    ) {
-        uint M = dims.x, N = dims.y, K_dim = dims.z;
-        uint row = gid.y, col = gid.x;
-
-        if (row >= N || col >= K_dim) return;
-
-        // Dequantize current K and V elements
-        char k_quantized = K_quantized[row * K_dim + col];
-        char v_quantized = V_quantized[row * K_dim + col];
-
-        float k_dequantized = (float(k_quantized) - float(k_zero_point)) * k_scale;
-        float v_dequantized = (float(v_quantized) - float(v_zero_point)) * v_scale;
-
-        // Improved straight-through estimators based on 2024 research
-        float k_ste = 1.0f;  // Always use identity gradient
-        float v_ste = 1.0f;  // Always use identity gradient
-
-        // Apply soft clipping factors instead of hard zeroing
-        float k_clip_factor = 1.0f;
-        float v_clip_factor = 1.0f;
-        if (abs(k_dequantized) > ste_clip_range) {
-            k_clip_factor = ste_clip_range / abs(k_dequantized);
-            k_clip_factor = max(k_clip_factor, 0.1f);  // Minimum 10% gradient flow
-        }
-        if (abs(v_dequantized) > ste_clip_range) {
-            v_clip_factor = ste_clip_range / abs(v_dequantized);
-            v_clip_factor = max(v_clip_factor, 0.1f);  // Minimum 10% gradient flow
-        }
-
-        // Initialize outputs to zero first
-        dK[row * K_dim + col] = 0.0f;
-        dV[row * K_dim + col] = 0.0f;
-
-        // Compute dK and dV with numerical stability
-        float dk_accumulator = 0.0f;
-        float dv_accumulator = 0.0f;
-
-        for (uint m = 0; m < M; m++) {
-            // Compute QK^T dot product for attention weight with stability
-            float qk_dot = 0.0f;
-            for (uint k = 0; k < K_dim; k++) {
-                float q_k = (float(Q_quantized[m * K_dim + k]) - float(q_zero_point)) * q_scale;
-                float k_k = (float(K_quantized[row * K_dim + k]) - float(k_zero_point)) * k_scale;
-                qk_dot += q_k * k_k;
-            }
-
-            // Use stable softmax computation
-            float clamped_qk = clamp(qk_dot, -10.0f, 10.0f);
-            float stable_logit = clamped_qk - L[m];
-            float p_val = exp(stable_logit);
-
-            // Clamp attention weights to reasonable range
-            p_val = clamp(p_val, 0.0f, 1.0f);
-
-            // Simplified dK computation for numerical stability
-            float q_val = (float(Q_quantized[m * K_dim + col]) - float(q_zero_point)) * q_scale;
-            float grad_factor = p_val * dO[m * K_dim + col];
-
-            // Scale down to prevent explosion
-            grad_factor *= 0.1f; // Damping factor
-
-            dk_accumulator += q_val * grad_factor;
-
-            // Simplified dV computation
-            dv_accumulator += p_val * dO[m * K_dim + col] * 0.1f; // Also apply damping
-        }
-
-        // Apply final clamping to prevent NaN/Inf
-        dk_accumulator = clamp(dk_accumulator, -100.0f, 100.0f);
-        dv_accumulator = clamp(dv_accumulator, -100.0f, 100.0f);
-
-        // Apply improved straight-through estimators with soft clipping and store
-        dK[row * K_dim + col] = dk_accumulator * k_ste * k_clip_factor;
-        dV[row * K_dim + col] = dv_accumulator * v_ste * v_clip_factor;
+    if let buffer = operand as? MTLBuffer {
+      return OperandBinding(
+        buffer: buffer,
+        scale: 1.0,
+        zeroPoint: 0,
+        precision: .FP16,
+        shape: nil,
+        blockScales: nil,
+        blockZeroPoints: nil,
+        precomputedSums: nil,
+        blockSize: nil
+      )
     }
-    """
+
+    print("Error: Unsupported \(label) operand type: \(String(describing: type(of: operand)))")
+    return nil
   }
 }

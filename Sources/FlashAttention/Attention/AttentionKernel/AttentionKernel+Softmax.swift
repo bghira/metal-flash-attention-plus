@@ -303,7 +303,7 @@ extension AttentionKernel {
 
   func applyExternalMask() -> String {
     """
-    if (mask_buffer != nullptr && has_mask != 0) {
+    if (mask_buffer != nullptr) {
       uint row_idx = \(parallelizationGroupOffset) + morton_offset.y;
       uint col_base = \(traversalOffset) + c + morton_offset.x;
 

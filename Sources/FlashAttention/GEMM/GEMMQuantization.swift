@@ -55,7 +55,7 @@ extension QuantizationMode {
     switch self {
     case .tensorWise:
       try container.encode(CaseName.tensorWise, forKey: .caseName)
-    case .blockwise(let blockSizeK, let bothOperands):
+    case let .blockwise(blockSizeK, bothOperands):
       try container.encode(CaseName.blockwise, forKey: .caseName)
       try container.encode(blockSizeK, forKey: .blockSize)
       try container.encode(bothOperands, forKey: .bothOperands)
@@ -121,8 +121,8 @@ public struct QuantizationParameters: Codable {
     self.zeroPoint = zeroPoint
     self.precision = precision
     self.mode = mode
-    self.additionalScales = nil
-    self.additionalZeroPoints = nil
+    additionalScales = nil
+    additionalZeroPoints = nil
     self.strategy = strategy
     self.strategyVersion = strategyVersion
 
@@ -143,16 +143,16 @@ public struct QuantizationParameters: Codable {
     strategy: QuantizationStrategy = .legacy,
     strategyVersion: UInt8 = QuantizationParameters.currentStrategyVersion
   ) {
-    self.scale = scales.first ?? 1.0
-    self.zeroPoint = zeroPoints.first ?? 0
+    scale = scales.first ?? 1.0
+    zeroPoint = zeroPoints.first ?? 0
     self.precision = precision
     self.mode = mode
-    self.additionalScales = scales.count > 1 ? Array(scales.dropFirst()) : nil
-    self.additionalZeroPoints = zeroPoints.count > 1 ? Array(zeroPoints.dropFirst()) : nil
+    additionalScales = scales.count > 1 ? Array(scales.dropFirst()) : nil
+    additionalZeroPoints = zeroPoints.count > 1 ? Array(zeroPoints.dropFirst()) : nil
     self.strategy = strategy
     self.strategyVersion = strategyVersion
 
-    let allZeroPoints = zeroPoints.isEmpty ? [self.zeroPoint] : zeroPoints
+    let allZeroPoints = zeroPoints.isEmpty ? [zeroPoint] : zeroPoints
     QuantizationParameters.validate(
       strategy: strategy,
       zeroPoints: allZeroPoints,
@@ -169,7 +169,9 @@ public struct QuantizationParameters: Codable {
   ) {
     guard precision.requiresQuantizationParameters else {
       if strategy != .legacy {
-        print("Warning: Ignoring \(strategy) strategy for precision \(precision); quantization parameters are unused.")
+        print(
+          "Warning: Ignoring \(strategy) strategy for precision \(precision); quantization parameters are unused."
+        )
       }
       return
     }
@@ -177,10 +179,12 @@ public struct QuantizationParameters: Codable {
     guard strategy == .symmetric else { return }
 
     if let nonZero = zeroPoints.first(where: { $0 != 0 }) {
-      preconditionFailure("Symmetric quantization requires zero points to be zero; found \(nonZero).")
+      preconditionFailure(
+        "Symmetric quantization requires zero points to be zero; found \(nonZero)."
+      )
     }
 
-    if case .blockwise(let blockSize, _) = mode {
+    if case let .blockwise(blockSize, _) = mode {
       precondition(
         blockSize % 8 == 0,
         "Symmetric block-wise quantization requires block sizes that are multiples of 8."
@@ -207,15 +211,20 @@ public struct QuantizationParameters: Codable {
     precision = try container.decode(GEMMOperandPrecision.self, forKey: .precision)
     mode = try container.decode(QuantizationMode.self, forKey: .mode)
     additionalScales = try container.decodeIfPresent([Float].self, forKey: .additionalScales)
-    additionalZeroPoints = try container.decodeIfPresent([Int32].self, forKey: .additionalZeroPoints)
-    strategy = try container.decodeIfPresent(QuantizationStrategy.self, forKey: .strategy) ?? .legacy
-    strategyVersion = try container.decodeIfPresent(UInt8.self, forKey: .strategyVersion) ?? QuantizationParameters.currentStrategyVersion
+    additionalZeroPoints = try container.decodeIfPresent(
+      [Int32].self,
+      forKey: .additionalZeroPoints
+    )
+    strategy = try container
+      .decodeIfPresent(QuantizationStrategy.self, forKey: .strategy) ?? .legacy
+    strategyVersion = try container
+      .decodeIfPresent(UInt8.self, forKey: .strategyVersion) ?? QuantizationParameters
+      .currentStrategyVersion
 
-    let stackedZeroPoints: [Int32]
-    if let extras = additionalZeroPoints, !extras.isEmpty {
-      stackedZeroPoints = [zeroPoint] + extras
+    let stackedZeroPoints: [Int32] = if let extras = additionalZeroPoints, !extras.isEmpty {
+      [zeroPoint] + extras
     } else {
-      stackedZeroPoints = [zeroPoint]
+      [zeroPoint]
     }
 
     QuantizationParameters.validate(
@@ -254,14 +263,15 @@ public extension GEMMOperandPrecision {
     shape: [Int] = [],
     mode: QuantizationMode = .tensorWise,
     strategy: QuantizationStrategy = .legacy
-  ) -> QuantizationParameters
+  )
+    -> QuantizationParameters
   {
     switch mode {
     case .tensorWise:
-      return calculateTensorWiseParameters(data: data, count: count, strategy: strategy)
+      calculateTensorWiseParameters(data: data, count: count, strategy: strategy)
 
-    case .blockwise(let blockSize, _):
-      return calculateBlockWiseParameters(
+    case let .blockwise(blockSize, _):
+      calculateBlockWiseParameters(
         data: data,
         count: count,
         shape: shape,
@@ -270,7 +280,7 @@ public extension GEMMOperandPrecision {
       )
 
     case .rowWise:
-      return calculateRowWiseParameters(data: data, count: count, shape: shape, strategy: strategy)
+      calculateRowWiseParameters(data: data, count: count, shape: shape, strategy: strategy)
     }
   }
 
@@ -279,7 +289,9 @@ public extension GEMMOperandPrecision {
     data: UnsafePointer<Float>,
     count: Int,
     strategy: QuantizationStrategy
-  ) -> QuantizationParameters {
+  )
+    -> QuantizationParameters
+  {
     // Find min and max values across entire tensor
     var minVal = Float.greatestFiniteMagnitude
     var maxVal = -Float.greatestFiniteMagnitude
@@ -327,7 +339,9 @@ public extension GEMMOperandPrecision {
     shape: [Int],
     blockSize: Int,
     strategy: QuantizationStrategy
-  ) -> QuantizationParameters {
+  )
+    -> QuantizationParameters
+  {
     guard shape.count >= 2 else {
       // Fall back to tensor-wise if shape is insufficient
       return calculateTensorWiseParameters(data: data, count: count, strategy: strategy)
@@ -395,7 +409,9 @@ public extension GEMMOperandPrecision {
     count: Int,
     shape: [Int],
     strategy: QuantizationStrategy
-  ) -> QuantizationParameters {
+  )
+    -> QuantizationParameters
+  {
     guard shape.count >= 2 else {
       // Fall back to tensor-wise if shape is insufficient
       return calculateTensorWiseParameters(data: data, count: count, strategy: strategy)
@@ -523,6 +539,131 @@ public extension GEMMOperandPrecision {
       fatalError("Dequantization only supported for INT8 and INT4")
     }
   }
+
+  /// Per-block (2D blockSize×blockSize) quantization.
+  ///
+  /// Block layout: the tensor is treated as 2D `[shape[0], shape[1]]` (row-major)
+  /// and tiled into `blockSize × blockSize` blocks. `scales` / `zeroPoints` are
+  /// flattened in row-major block order:
+  ///
+  ///   blockIndex(r, c) = (r / blockSize) * numBlocksCol + (c / blockSize)
+  ///
+  /// where `numBlocksCol = ceil(cols / blockSize)`. This must stay in sync with
+  /// the index computed inside the Metal kernel's dequantizing load.
+  func quantizeBlockwise(
+    input: UnsafePointer<Float>,
+    output: UnsafeMutableRawPointer,
+    count: Int,
+    shape: [Int],
+    blockSize: Int,
+    scales: [Float],
+    zeroPoints: [Int32]
+  ) {
+    guard shape.count >= 2, blockSize > 0 else {
+      fatalError("Blockwise quantization requires a 2D shape and positive block size.")
+    }
+    let cols = shape[1]
+    let numBlocksCol = (cols + blockSize - 1) / blockSize
+
+    func blockIndex(_ r: Int, _ c: Int) -> Int {
+      (r / blockSize) * numBlocksCol + (c / blockSize)
+    }
+
+    switch self {
+    case .INT8:
+      let out = output.bindMemory(to: Int8.self, capacity: count)
+      for i in 0..<count {
+        let r = i / cols
+        let c = i % cols
+        let idx = blockIndex(r, c)
+        let scale = scales[idx]
+        let zp = zeroPoints[idx]
+        let q = Int32(round(input[i] / scale)) + zp
+        out[i] = Int8(clamping: q)
+      }
+
+    case .INT4:
+      let out = output.bindMemory(to: UInt8.self, capacity: (count + 1) / 2)
+      for i in stride(from: 0, to: count, by: 2) {
+        let r0 = i / cols
+        let c0 = i % cols
+        let s0 = scales[blockIndex(r0, c0)]
+        let z0 = zeroPoints[blockIndex(r0, c0)]
+        let val1 = Int32(round(input[i] / s0)) + z0
+
+        let packed1 = UInt8(max(0, min(15, val1 + 8)))
+        var byte = packed1
+
+        if i + 1 < count {
+          let next = i + 1
+          let r1 = next / cols
+          let c1 = next % cols
+          let s1 = scales[blockIndex(r1, c1)]
+          let z1 = zeroPoints[blockIndex(r1, c1)]
+          let val2 = Int32(round(input[next] / s1)) + z1
+          let packed2 = UInt8(max(0, min(15, val2 + 8)))
+          byte |= (packed2 << 4)
+        }
+        out[i / 2] = byte
+      }
+
+    default:
+      fatalError("Blockwise quantization only supported for INT8 and INT4")
+    }
+  }
+
+  /// Per-block dequantization (inverse of `quantizeBlockwise`).
+  func dequantizeBlockwise(
+    input: UnsafeRawPointer,
+    output: UnsafeMutablePointer<Float>,
+    count: Int,
+    shape: [Int],
+    blockSize: Int,
+    scales: [Float],
+    zeroPoints: [Int32]
+  ) {
+    guard shape.count >= 2, blockSize > 0 else {
+      fatalError("Blockwise dequantization requires a 2D shape and positive block size.")
+    }
+    let cols = shape[1]
+    let numBlocksCol = (cols + blockSize - 1) / blockSize
+
+    func blockIndex(_ r: Int, _ c: Int) -> Int {
+      (r / blockSize) * numBlocksCol + (c / blockSize)
+    }
+
+    switch self {
+    case .INT8:
+      let inData = input.bindMemory(to: Int8.self, capacity: count)
+      for i in 0..<count {
+        let r = i / cols
+        let c = i % cols
+        let idx = blockIndex(r, c)
+        output[i] = (Float(inData[i]) - Float(zeroPoints[idx])) * scales[idx]
+      }
+
+    case .INT4:
+      let inData = input.bindMemory(to: UInt8.self, capacity: (count + 1) / 2)
+      for i in stride(from: 0, to: count, by: 2) {
+        let packed = inData[i / 2]
+        let lo = Int32(packed & 0xF) - 8
+        let r0 = i / cols
+        let c0 = i % cols
+        let idx0 = blockIndex(r0, c0)
+        output[i] = (Float(lo) - Float(zeroPoints[idx0])) * scales[idx0]
+        if i + 1 < count {
+          let hi = Int32(packed >> 4) - 8
+          let r1 = (i + 1) / cols
+          let c1 = (i + 1) % cols
+          let idx1 = blockIndex(r1, c1)
+          output[i + 1] = (Float(hi) - Float(zeroPoints[idx1])) * scales[idx1]
+        }
+      }
+
+    default:
+      fatalError("Blockwise dequantization only supported for INT8 and INT4")
+    }
+  }
 }
 
 /// Utility class for managing quantized tensor operations
@@ -539,7 +680,7 @@ public class QuantizedTensor: Codable {
   public let precomputedSums: MTLBuffer?
 
   public init(
-    device: MTLDevice,
+    device _: MTLDevice,
     data: MTLBuffer,
     parameters: QuantizationParameters,
     elementCount: Int,
@@ -552,7 +693,7 @@ public class QuantizedTensor: Codable {
     self.data = data
     self.parameters = parameters
     self.elementCount = elementCount
-    self.originalShape = shape
+    originalShape = shape
     self.blockScales = blockScales
     self.blockZeroPoints = blockZeroPoints
     self.blockSizeK = blockSizeK
@@ -584,6 +725,9 @@ public class QuantizedTensor: Codable {
     let parameters: QuantizationParameters
     let bufferSize: Int
     var finalBlockSizeK: Int?
+    // Reconstructed per-block scales / zero-points (blockwise only).
+    var blockScalesArray: [Float] = []
+    var blockZeroPointsArray: [Int32] = []
 
     if precision.requiresQuantizationParameters {
       parameters = floatData.withUnsafeBufferPointer { buffer in
@@ -602,9 +746,12 @@ public class QuantizedTensor: Codable {
       }
       bufferSize = precision == .INT4 ? (elementCount + 1) / 2 : elementCount * precision.size
 
-      // Extract blockSizeK from mode if it's blockwise
-      if case .blockwise(let blockSize, _) = mode {
+      // Extract blockSizeK from mode if it's blockwise, and reconstruct the
+      // flat per-block scale / zero-point arrays that the kernel will consume.
+      if case let .blockwise(blockSize, _) = mode {
         finalBlockSizeK = blockSize
+        blockScalesArray = [parameters.scale] + (parameters.additionalScales ?? [])
+        blockZeroPointsArray = [parameters.zeroPoint] + (parameters.additionalZeroPoints ?? [])
       }
     } else {
       // For non-quantized types (FP32, FP16, BF16), create dummy parameters
@@ -624,12 +771,24 @@ public class QuantizedTensor: Codable {
 
     floatData.withUnsafeBufferPointer { floatPtr in
       if precision.requiresQuantizationParameters {
-        precision.quantize(
-          input: floatPtr.baseAddress!,
-          output: buffer.contents(),
-          count: elementCount,
-          parameters: parameters
-        )
+        if case let .blockwise(blockSize, _) = mode, !blockScalesArray.isEmpty {
+          precision.quantizeBlockwise(
+            input: floatPtr.baseAddress!,
+            output: buffer.contents(),
+            count: elementCount,
+            shape: shape,
+            blockSize: blockSize,
+            scales: blockScalesArray,
+            zeroPoints: blockZeroPointsArray
+          )
+        } else {
+          precision.quantize(
+            input: floatPtr.baseAddress!,
+            output: buffer.contents(),
+            count: elementCount,
+            parameters: parameters
+          )
+        }
       } else {
         // For non-quantized types, just copy the data in the appropriate format
         switch precision {
@@ -656,30 +815,80 @@ public class QuantizedTensor: Codable {
       }
     }
 
+    // For blockwise tensors, materialize the per-block scale / zero-point
+    // arrays into Metal buffers the kernel can read. Falls back to any
+    // caller-supplied buffers for non-blockwise modes.
+    let resolvedBlockScales: MTLBuffer?
+    let resolvedBlockZeroPoints: MTLBuffer?
+    if !blockScalesArray.isEmpty {
+      resolvedBlockScales = device.makeBuffer(
+        bytes: blockScalesArray,
+        length: blockScalesArray.count * MemoryLayout<Float>.size,
+        options: .storageModeShared
+      )
+      resolvedBlockZeroPoints = device.makeBuffer(
+        bytes: blockZeroPointsArray,
+        length: blockZeroPointsArray.count * MemoryLayout<Int32>.size,
+        options: .storageModeShared
+      )
+    } else {
+      resolvedBlockScales = blockScales
+      resolvedBlockZeroPoints = blockZeroPoints
+    }
+
     return QuantizedTensor(
       device: device,
       data: buffer,
       parameters: parameters,
       elementCount: elementCount,
       shape: shape,
-      blockScales: blockScales,
-      blockZeroPoints: blockZeroPoints,
+      blockScales: resolvedBlockScales,
+      blockZeroPoints: resolvedBlockZeroPoints,
       blockSizeK: finalBlockSizeK,
       precomputedSums: precomputedSums
     )
   }
 
-  /// Convert quantized tensor back to floating point
+  /// Convert quantized tensor back to floating point.
   /// - Returns: Array of floating point values
   public func toFloats() -> [Float] {
     var result = [Float](repeating: 0, count: elementCount)
-    result.withUnsafeMutableBufferPointer { floatPtr in
-      parameters.precision.dequantize(
-        input: data.contents(),
-        output: floatPtr.baseAddress!,
-        count: elementCount,
-        parameters: parameters
-      )
+
+    // Use the per-block path when the tensor carries block scales so the
+    // round-trip matches how the kernel will dequantize.
+    if
+      let bs = blockSizeK, let scalesBuf = blockScales, let zpBuf = blockZeroPoints,
+      case .blockwise = parameters.mode
+    {
+      let numBlocks = scalesBuf.length / MemoryLayout<Float>.size
+      let scales = Array(UnsafeBufferPointer(
+        start: scalesBuf.contents().bindMemory(to: Float.self, capacity: numBlocks),
+        count: numBlocks
+      ))
+      let zps = Array(UnsafeBufferPointer(
+        start: zpBuf.contents().bindMemory(to: Int32.self, capacity: numBlocks),
+        count: numBlocks
+      ))
+      result.withUnsafeMutableBufferPointer { floatPtr in
+        parameters.precision.dequantizeBlockwise(
+          input: data.contents(),
+          output: floatPtr.baseAddress!,
+          count: elementCount,
+          shape: originalShape,
+          blockSize: bs,
+          scales: scales,
+          zeroPoints: zps
+        )
+      }
+    } else {
+      result.withUnsafeMutableBufferPointer { floatPtr in
+        parameters.precision.dequantize(
+          input: data.contents(),
+          output: floatPtr.baseAddress!,
+          count: elementCount,
+          parameters: parameters
+        )
+      }
     }
     return result
   }
@@ -712,7 +921,7 @@ public class QuantizedTensor: Codable {
 
   /// Create aligned buffer with 64-byte alignment
   private static func createAlignedBuffer(device: MTLDevice, size: Int) -> MTLBuffer? {
-    let alignedSize = (size + 63) & ~63  // Round up to 64-byte boundary
+    let alignedSize = (size + 63) & ~63 // Round up to 64-byte boundary
     return device.makeBuffer(length: alignedSize, options: .storageModeShared)
   }
 
@@ -758,15 +967,15 @@ public class QuantizedTensor: Codable {
     try container.encode(serializeBuffer(data), forKey: .data)
 
     // Serialize optional block-wise buffers
-    if let blockScales = blockScales {
+    if let blockScales {
       try container.encode(serializeBuffer(blockScales), forKey: .blockScales)
     }
 
-    if let blockZeroPoints = blockZeroPoints {
+    if let blockZeroPoints {
       try container.encode(serializeBuffer(blockZeroPoints), forKey: .blockZeroPoints)
     }
 
-    if let precomputedSums = precomputedSums {
+    if let precomputedSums {
       try container.encode(serializeBuffer(precomputedSums), forKey: .precomputedSums)
     }
   }
@@ -857,16 +1066,18 @@ public class QuantizedTensor: Codable {
       var codingPath: [CodingKey] { baseDecoder.codingPath }
       var userInfo: [CodingUserInfoKey: Any] { baseDecoder.userInfo }
 
-      func container<Key>(keyedBy type: Key.Type) throws -> KeyedDecodingContainer<Key> where Key: CodingKey {
-        return try baseDecoder.container(keyedBy: type)
+      func container<Key>(keyedBy type: Key.Type) throws -> KeyedDecodingContainer<Key>
+        where Key: CodingKey
+      {
+        try baseDecoder.container(keyedBy: type)
       }
 
       func unkeyedContainer() throws -> UnkeyedDecodingContainer {
-        return try baseDecoder.unkeyedContainer()
+        try baseDecoder.unkeyedContainer()
       }
 
       func singleValueContainer() throws -> SingleValueDecodingContainer {
-        return try baseDecoder.singleValueContainer()
+        try baseDecoder.singleValueContainer()
       }
     }
 
