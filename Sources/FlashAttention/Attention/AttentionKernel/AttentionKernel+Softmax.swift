@@ -330,28 +330,21 @@ extension AttentionKernel {
     """
   }
 
-  // Auto-optimization heuristics based on comprehensive benchmarking
+  // Resolve bitmask-vs-element-wise masking. An explicit override (used by
+  // calibration to benchmark both strategies) wins; otherwise the shared,
+  // cached, data-driven heuristic decides — so the kernel and downstream
+  // callers always agree.
   private func shouldUseBitmaskOptimization() -> Bool {
-    // Head dimensions where bitmask consistently performs well
-    let headDim = headDimension
-
-    // Based on benchmark results: head dimensions 64 and 128 show strong bitmask preference
-    if headDim == 64 || headDim == 128 {
+    if let override = maskingStrategyOverride {
+      return override == .bitmask
+    }
+    let head = Int(headDimension)
+    guard let seq = sequenceLength.map(Int.init) else {
       return true
     }
-
-    // For smaller head dimensions, bitmask tends to be better
-    if headDim <= 96 {
-      return true
-    }
-
-    // For very large head dimensions, element-wise tends to be more stable
-    if headDim >= 192 {
-      return false
-    }
-
-    // Default to bitmask for intermediate sizes (good average performance)
-    return true
+    return MaskingStrategyHeuristic.shared.recommend(
+      sequenceLength: seq, headDimension: head
+    ) == .bitmask
   }
 
   private func generateBitmaskMasking() -> String {

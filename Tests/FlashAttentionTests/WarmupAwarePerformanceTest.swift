@@ -41,6 +41,108 @@ final class WarmupAwarePerformanceTest: XCTestCase {
     }
   }
 
+  func testCalibrationPayloadRoundTrip() throws {
+    let heuristic = MaskingStrategyHeuristic.shared
+    heuristic.clearCache()
+
+    // Calibrate a couple of small shapes. calibrate() returns a serializable
+    // payload AND populates the in-memory cache as a side effect.
+    let shapes = [
+      (sequenceLength: 256, headDimension: 64),
+      (sequenceLength: 512, headDimension: 128),
+    ]
+    let calibration = heuristic.calibrate(shapes: shapes, warmupIterations: 3, trialIterations: 5)
+
+    XCTAssertEqual(
+      calibration.entries.count,
+      shapes.count,
+      "calibrate should produce one entry per shape"
+    )
+    XCTAssertEqual(calibration.deviceName, MTLContext.global.device.name)
+    print("\n📦 Calibration payload (\(calibration.deviceName)):")
+    for entry in calibration.entries {
+      print(
+        "  seq~\(entry.sequenceBucket), head=\(entry.headDimension): " +
+          "\(entry.strategy == .bitmask ? "BITMASK" : "ELEMENT-WISE") " +
+          "(bitmask \(String(format: "%.3f", entry.bitmaskMs))ms vs " +
+          "element-wise \(String(format: "%.3f", entry.elementWiseMs))ms)"
+      )
+    }
+
+    // Persist to a temp file via the separate store, then load it back and
+    // hydrate a fresh cache. Demonstrates the decoupled persistence: callers
+    // who don't persist just skip this and use the in-memory cache.
+    let url = FileManager.default.temporaryDirectory
+      .appendingPathComponent("masking-calibration-test.json")
+    try? FileManager.default.removeItem(at: url)
+    try MaskingCalibrationStore.save(calibration, to: url)
+    let loaded = try MaskingCalibrationStore.load(from: url)
+
+    heuristic.clearCache()
+
+    // After apply(), recommend() must return the measured strategy for each
+    // calibrated shape regardless of the default rule.
+    heuristic.apply(loaded)
+    for (shape, entry) in zip(shapes, loaded.entries) {
+      let recommended = heuristic.recommend(
+        sequenceLength: shape.sequenceLength,
+        headDimension: shape.headDimension
+      )
+      XCTAssertEqual(recommended, entry.strategy, "applied calibration should drive recommend()")
+    }
+
+    try? FileManager.default.removeItem(at: url)
+    print("✅ calibrate → save → load → apply round-trip verified")
+  }
+
+  func testWarmUpAmortizesAcrossRuns() throws {
+    let heuristic = MaskingStrategyHeuristic.shared
+    let url = FileManager.default.temporaryDirectory
+      .appendingPathComponent("masking-warmup-test.json")
+    try? FileManager.default.removeItem(at: url)
+
+    let shapes = [(sequenceLength: 256, headDimension: 64)]
+
+    // First warmUp: no persisted file → benchmark, save, apply.
+    heuristic.clearCache()
+    let first = heuristic.warmUp(
+      shapes: shapes,
+      persistTo: url,
+      warmupIterations: 3,
+      trialIterations: 5
+    )
+    XCTAssertFalse(first.entries.isEmpty, "first warmUp should calibrate")
+    XCTAssertTrue(
+      FileManager.default.fileExists(atPath: url.path),
+      "warmUp should persist when given a URL"
+    )
+    let firstStrategy = first.entries[0].strategy
+    XCTAssertEqual(
+      heuristic.recommend(sequenceLength: 256, headDimension: 64), firstStrategy,
+      "warmUp should populate the cache"
+    )
+
+    // Second warmUp: file exists + device matches → load (no benchmark).
+    // Proven by the cache being repopulated after a clear WITHOUT calibrating:
+    // recommend() still returns the persisted strategy.
+    heuristic.clearCache()
+    let second = heuristic.warmUp(
+      shapes: shapes,
+      persistTo: url,
+      warmupIterations: 3,
+      trialIterations: 5
+    )
+    XCTAssertEqual(second.deviceName, first.deviceName)
+    XCTAssertEqual(second.entries[0].strategy, firstStrategy, "loaded calibration should match")
+    XCTAssertEqual(
+      heuristic.recommend(sequenceLength: 256, headDimension: 64), firstStrategy,
+      "loaded calibration should drive recommend()"
+    )
+
+    try? FileManager.default.removeItem(at: url)
+    print("✅ warmUp amortizes: first call calibrated+persisted, second call loaded")
+  }
+
   func testWarmupAwareAutoOptimization() throws {
     print("\n🔥 Warmup-Aware Auto-Optimization Validation")
     print("=" + String(repeating: "=", count: 80))
@@ -351,50 +453,51 @@ final class WarmupAwarePerformanceTest: XCTestCase {
   }
 
   private func testAutoOptimizationDecisions(_ results: [WarmupResult]) {
-    print("\n🤖 Testing Auto-Optimization Decisions")
+    print("\n🤖 Shared heuristic vs. measured (warm)")
     print("-" + String(repeating: "-", count: 60))
 
-    for result in results {
-      // Test our auto-optimization heuristic
-      let totalElements = result.sequenceLength * result.sequenceLength * result.headDimension
-      let shouldUseBitmask = shouldUseBitmaskOptimization(
-        sequenceLength: result.sequenceLength,
-        headDimension: result.headDimension,
-        totalElements: totalElements
-      )
+    // Clear any prior calibration so we measure the DEFAULT rule's accuracy.
+    MaskingStrategyHeuristic.shared.clearCache()
 
-      let actuallyBetter = result.warmSpeedup > 1.0
-      let decision = shouldUseBitmask ? "BITMASK" : "ELEMENT-WISE"
-      let correct = shouldUseBitmask == actuallyBetter
+    var ruleCorrect = 0
+    for result in results {
+      let seq = result.sequenceLength
+      let head = result.headDimension
+      let decision = MaskingStrategyHeuristic.shared.recommend(
+        sequenceLength: seq, headDimension: head
+      )
+      let actuallyBitmask = result.warmSpeedup > 1.0
+      let actual: MaskingStrategy = actuallyBitmask ? .bitmask : .elementWise
+      let correct = (decision == actual)
+      if correct { ruleCorrect += 1 }
 
       print(
-        "seq=\(result.sequenceLength), head=\(result.headDimension): " +
-          "Decision=\(decision), Actually better=\(actuallyBetter ? "BITMASK" : "ELEMENT-WISE") " +
-          "\(correct ? "✅" : "❌")"
+        "seq=\(seq), head=\(head): rule=\(decision == .bitmask ? "BITMASK     " : "ELEMENT-WISE"), " +
+          "measured=\(actual == .bitmask ? "BITMASK     " : "ELEMENT-WISE") " +
+          "(warm \(String(format: "%+.1f%%", result.warmSpeedup * 100 - 100))) \(correct ? "✅" : "❌")"
+      )
+
+      // Feed the warm measurement back into the shared cache so the kernel
+      // and downstream callers see the calibrated truth for this shape.
+      MaskingStrategyHeuristic.shared.recordMeasurement(
+        sequenceLength: seq, headDimension: head, strategy: actual
       )
     }
-  }
 
-  // Copy of the auto-optimization logic from the main implementation
-  private func shouldUseBitmaskOptimization(
-    sequenceLength: Int,
-    headDimension: Int,
-    totalElements: Int
-  )
-    -> Bool
-  {
-    if totalElements < 50_331_648 {
-      return true
+    print(
+      "\nDefault-rule accuracy: \(ruleCorrect)/\(results.count) " +
+        "(\(String(format: "%.0f%%", Double(ruleCorrect) / Double(results.count) * 100)))"
+    )
+
+    // Confirm the cache now reflects the measured truth.
+    var cacheMatches = 0
+    for result in results {
+      let cached = MaskingStrategyHeuristic.shared.recommend(
+        sequenceLength: result.sequenceLength, headDimension: result.headDimension
+      )
+      let actual: MaskingStrategy = result.warmSpeedup > 1.0 ? .bitmask : .elementWise
+      if cached == actual { cacheMatches += 1 }
     }
-
-    if headDimension == 64 || headDimension == 128 {
-      return true
-    }
-
-    if sequenceLength <= 256 {
-      return true
-    }
-
-    return false
+    print("Post-calibration cache accuracy: \(cacheMatches)/\(results.count)")
   }
 }

@@ -25,6 +25,10 @@ public struct AttentionKernel {
       parallelization: UInt16, traversal: UInt16, head: UInt16
     )
   var headDimension: UInt16
+  /// Sequence length used for the masking-strategy heuristic (nil → head-only).
+  var sequenceLength: UInt32?
+  /// Force a masking strategy, bypassing the heuristic (used by calibration).
+  var maskingStrategyOverride: MaskingStrategy?
   public var threadgroupMemoryAllocation: UInt16
 
   // Scale factor for attention computation
@@ -52,6 +56,8 @@ public struct AttentionKernel {
 
     self.blockDimensions = blockDimensions
     self.headDimension = headDimension
+    sequenceLength = descriptor.sequenceLength
+    maskingStrategyOverride = descriptor.maskingStrategyOverride
 
     // Set scale factor with backward compatibility
     if let customScale = descriptor.softmaxScale {
