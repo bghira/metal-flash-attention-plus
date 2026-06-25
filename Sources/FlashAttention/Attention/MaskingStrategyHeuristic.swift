@@ -333,7 +333,7 @@ public extension MaskingStrategyHeuristic {
     desc.setFunctionConstants(functionConstants)
 
     guard
-      let library = try? device.makeLibrary(source: kernel.createSource(), options: nil),
+      let library = try? device.makeLibrary(source: kernel.createSource(), options: .mfaDefault),
       let function = try? library.makeFunction(name: "attention", constantValues: functionConstants)
     else {
       return nil

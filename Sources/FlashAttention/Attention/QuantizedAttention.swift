@@ -573,7 +573,7 @@ public class QuantizedAttention {
     }
 
     do {
-      let library = try device.makeLibrary(source: source, options: nil)
+      let library = try device.makeLibrary(source: source, options: .mfaDefault)
 
       let functionConstants = MTLFunctionConstantValues()
       descriptor.baseDescriptor.setFunctionConstants(functionConstants)
@@ -1081,7 +1081,7 @@ extension QuantizedAttention {
     }
 
     do {
-      let library = try device.makeLibrary(source: source, options: nil)
+      let library = try device.makeLibrary(source: source, options: .mfaDefault)
       let functionConstants = MTLFunctionConstantValues()
       descriptor.baseDescriptor.setFunctionConstants(functionConstants)
       var bq = false
@@ -1410,7 +1410,7 @@ extension QuantizedAttention {
     }
 
     do {
-      let library = try device.makeLibrary(source: source, options: nil)
+      let library = try device.makeLibrary(source: source, options: .mfaDefault)
       guard let function = library.makeFunction(name: functionName) else {
         print("Error: Function '\(functionName)' not found in library")
         return nil

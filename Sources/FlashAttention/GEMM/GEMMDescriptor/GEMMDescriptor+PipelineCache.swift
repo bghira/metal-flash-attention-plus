@@ -98,7 +98,7 @@ public extension GEMMKernel {
 
       let kernel = GEMMKernel(descriptor: kernelDescriptor)
       let source = kernel.createSource()
-      let library = try! device.makeLibrary(source: source, options: nil)
+      let library = try! device.makeLibrary(source: source, options: .mfaDefault)
 
       let output = (kernel, library)
       cache.storeLibrary(output, for: kernelDescriptor)

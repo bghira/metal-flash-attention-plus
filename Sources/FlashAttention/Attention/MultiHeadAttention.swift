@@ -375,7 +375,7 @@ public class MultiHeadAttention {
 
     do {
       let patchedSource = GEMMBFloatHeaderEmbedder.embed(into: source)
-      let library = try device.makeLibrary(source: patchedSource, options: nil)
+      let library = try device.makeLibrary(source: patchedSource, options: .mfaDefault)
 
       let functionConstants = MTLFunctionConstantValues()
       descriptor.baseDescriptor.setFunctionConstants(functionConstants)
