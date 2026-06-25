@@ -181,19 +181,22 @@ public class MLAOptimizedGEMMMFA {
     let totalDim = numHeads * headDim
     let kvSize = batchSize * sequenceLength * totalDim * MemoryLayout<Float16>.size
 
-    // Allocate K,V buffers
-    if self.decompressedK == nil || currentKVSize < kvSize {
-      self.decompressedK = device.makeBuffer(
-        length: kvSize, options: .storageModePrivate
-      )
-      self.decompressedV = device.makeBuffer(
-        length: kvSize, options: .storageModePrivate
-      )
-      currentKVSize = kvSize
+    // Use caller-provided output buffers when supplied (e.g. the FFI bridge,
+    // which backs them with readable MPS/shared-memory tensors). Only allocate
+    // our own private buffers for the Swift-direct path when none are given.
+    if decompressedK == nil || decompressedV == nil {
+      if self.decompressedK == nil || currentKVSize < kvSize {
+        self.decompressedK = device.makeBuffer(
+          length: kvSize, options: .storageModePrivate
+        )
+        self.decompressedV = device.makeBuffer(
+          length: kvSize, options: .storageModePrivate
+        )
+        currentKVSize = kvSize
+      }
+      decompressedK = self.decompressedK
+      decompressedV = self.decompressedV
     }
-
-    decompressedK = self.decompressedK
-    decompressedV = self.decompressedV
 
     guard
       let kBuf = decompressedK,
