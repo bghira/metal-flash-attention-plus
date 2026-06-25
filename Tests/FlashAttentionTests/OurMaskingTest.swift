@@ -48,40 +48,32 @@ final class OurMaskingTest: XCTestCase {
     print("✅ Custom kernel created")
     print("   Sparsity pattern: custom")
 
-    // Check generated source code
+    // Check generated source code against the ACTUAL codegen markers (the old
+    // "Apply causal masking" / "col_idx > row_idx" strings were removed when
+    // causal masking moved to the bitmask approach — CausalAttentionTest even
+    // asserts those strings are absent).
     print("\n🔍 Checking generated Metal source...")
     let causalSource = causalKernel.createSource()
 
-    if causalSource.contains("Apply causal masking") {
-      print("✅ Causal masking code found in Metal source")
-    } else {
-      print("❌ Causal masking code NOT found in Metal source")
-    }
-
-    if causalSource.contains("col_idx > row_idx") {
-      print("✅ Causal condition found in Metal source")
-    } else {
-      print("❌ Causal condition NOT found in Metal source")
-    }
-
-    print("\n📄 Metal source preview (causal masking section):")
-    let lines = causalSource.components(separatedBy: .newlines)
-    for (i, line) in lines.enumerated() {
-      if line.contains("Apply causal masking") {
-        let start = max(0, i - 2)
-        let end = min(lines.count, i + 10)
-        for j in start..<end {
-          print("   \(j): \(lines[j])")
-        }
-        break
-      }
-    }
+    XCTAssertTrue(causalSource.contains("IS_CAUSAL"), "Causal kernel should reference IS_CAUSAL")
+    XCTAssertTrue(
+      causalSource.contains("causal_mask"),
+      "Causal kernel should generate bitmask causal_mask logic"
+    )
+    // The sparsity-pattern dispatcher must be emitted for a causal descriptor.
+    XCTAssertTrue(
+      causalSource.contains("Apply sparsity patterns"),
+      "Sparsity pattern dispatcher missing"
+    )
+    // And the legacy string-based path must NOT be present.
+    XCTAssertFalse(
+      causalSource.contains("Apply causal masking"),
+      "Legacy causal string should be absent"
+    )
+    print("✅ Causal bitmask codegen verified (IS_CAUSAL, causal_mask)")
 
     print("\n🎯 Summary:")
-    print("   • Masking enum works: ✅")
-    print("   • Descriptor integration works: ✅")
-    print("   • Kernel creation works: ✅")
-    print("   • Metal code generation works: ✅")
-    print("   • Our implementation is CORRECT! 🎉")
+    print("   • Masking enum + descriptor integration: ✅")
+    print("   • Causal Metal codegen verified by assertions: ✅")
   }
 }

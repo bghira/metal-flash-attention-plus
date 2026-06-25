@@ -168,6 +168,9 @@ public extension AttentionDescriptor {
     output.blockDimensions = createBlockDimensions()
     output.cacheState = createCacheState()
     output.headDimension = createHeadDimension()
+    if let matrixDimensions {
+      output.sequenceLength = max(matrixDimensions.row, matrixDimensions.column)
+    }
     output.memoryPrecisions = memoryPrecisions
     if MTLContext.global.device.supportsFamily(.apple9) {
       output.preferAsyncCache = true

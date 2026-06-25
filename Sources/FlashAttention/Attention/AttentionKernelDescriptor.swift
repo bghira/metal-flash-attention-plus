@@ -17,6 +17,16 @@ public struct AttentionKernelDescriptor {
   /// Required. The problem size along the head dimension.
   public var headDimension: UInt16?
 
+  /// The sequence length used for masking-strategy selection
+  /// (`MaskingStrategyHeuristic`). Optional for backward compatibility; when
+  /// nil, the heuristic falls back to a head-only decision.
+  public var sequenceLength: UInt32?
+
+  /// Force a specific masking strategy at codegen time, bypassing the
+  /// heuristic. Used by `MaskingStrategyHeuristic.calibrate` to benchmark both
+  /// strategies for the same shape. `nil` (default) = consult the heuristic.
+  public var maskingStrategyOverride: MaskingStrategy?
+
   public var memoryPrecisions: [AttentionOperand: GEMMOperandPrecision] = [:]
 
   /// Scale factor for attention computation (typically 1/√head_dim).
