@@ -102,7 +102,7 @@ public class MLAOptimizedGEMMMFA {
     M: Int,
     N: Int,
     K: Int
-  ) {
+  ) throws {
     // Create descriptor
     var desc = GEMMDescriptor()
     desc.matrixDimensions = (M: UInt32(M), N: UInt32(N), K: UInt32(K))
@@ -115,7 +115,15 @@ public class MLAOptimizedGEMMMFA {
 
     // Retrieve cached kernel and pipeline
     guard let (kernel, pipeline) = GEMMKernel.cachedPipeline(for: desc) else {
-      fatalError("GEMM kernel not found in cache for \(M)×\(N)×\(K)")
+      // Throwing (rather than fatalError) keeps a kernel/pipeline miss on an
+      // unsupported GPU from trapping the host process — callers propagate it
+      // and the FFI bridge returns a clean error code.
+      throw NSError(
+        domain: "MLAOptimizedGEMMMFA", code: 3,
+        userInfo: [
+          NSLocalizedDescriptionKey: "GEMM kernel not available for \(M)×\(N)×\(K)"
+        ]
+      )
     }
 
     // Encode command
@@ -217,7 +225,7 @@ public class MLAOptimizedGEMMMFA {
     let K = kvLatentDim
 
     // Decompress K
-    encodeGEMM(
+    try encodeGEMM(
       commandBuffer: commandBuffer,
       A: kvLatent,
       B: wDecompressK,
@@ -228,7 +236,7 @@ public class MLAOptimizedGEMMMFA {
     )
 
     // Decompress V
-    encodeGEMM(
+    try encodeGEMM(
       commandBuffer: commandBuffer,
       A: kvLatent,
       B: wDecompressV,
