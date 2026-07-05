@@ -236,64 +236,75 @@ public class MultiHeadAttention {
 
     encoder.setComputePipelineState(pipelineState)
 
-    // Set buffers (no offsets for batched mode)
+    // Bind operands in the exact slot order the generated kernel expects
+    // (see AttentionKernel.createBufferBindings): Q@0 K@1 V@2 O@3 L@4,
+    // then (for non-quantized kernels) Q_strides@5 K_strides@6 V_strides@7,
+    // then num_heads@8 num_kv_heads@9 head_dim@10 seq@11, then mask@12.
     encoder.setBuffer(query, offset: 0, index: 0)
     encoder.setBuffer(key, offset: 0, index: 1)
     encoder.setBuffer(value, offset: 0, index: 2)
     encoder.setBuffer(output, offset: 0, index: 3)
 
+    // The kernel always writes L (logsumexp). Provide a scratch buffer for
+    // forward-only calls that pass logsumexp=nil, otherwise the kernel writes
+    // to an unbound slot and corrupts output.
+    let lBuffer: MTLBuffer
     if let logsumexp {
-      encoder.setBuffer(logsumexp, offset: 0, index: 4)
+      lBuffer = logsumexp
+    } else {
+      let lCount = Int(descriptor.queryShape.batchSize)
+        * Int(descriptor.queryShape.numHeads)
+        * Int(descriptor.queryShape.sequenceLength)
+      // storageModeShared + explicit zero-fill: the forward kernel seeds its
+      // online-softmax running max from L, so an uninitialised (garbage) L
+      // corrupts the FIRST dispatch of a shape (subsequent dispatches see the
+      // value written by the first and look correct). Zeroing removes that
+      // cold-dispatch hazard.
+      guard
+        let zeroed = device.makeBuffer(
+          length: max(lCount, 1) * MemoryLayout<UInt32>.size,
+          options: .storageModeShared
+        )
+      else {
+        return nil
+      }
+      memset(zeroed.contents(), 0, max(lCount, 1) * MemoryLayout<UInt32>.size)
+      lBuffer = zeroed
     }
+    encoder.setBuffer(lBuffer, offset: 0, index: 4)
 
-    // Calculate buffer index after quantization parameters
-    let baseIndex = 5 // After standard buffers
-    let quantBindings = quantizationBindings(for: descriptor)
-    var bufferIndex = baseIndex
-    for binding in quantBindings {
-      var scale = binding.parameters.scale
-      var zeroPoint = binding.parameters.zeroPoint
-      var strategy = UInt32(binding.parameters.strategy.rawValue)
-      var strategyVersion = UInt32(binding.parameters.strategyVersion)
+    // Strides @5/6/7: bind nil so the kernel uses its contiguous-fallback
+    // offset math (batch*num_heads + head) * seq * dim, which matches the
+    // contiguous BHSD layout the host now passes. (The kernel's stride-index
+    // path reads head stride from the wrong array slot; the contiguous path
+    // is correct, so disable the stride path by passing null.)
+    encoder.setBuffer(nil, offset: 0, index: 5)
+    encoder.setBuffer(nil, offset: 0, index: 6)
+    encoder.setBuffer(nil, offset: 0, index: 7)
 
-      encoder.setBytes(&scale, length: MemoryLayout<Float>.size, index: bufferIndex)
-      bufferIndex += 1
-
-      encoder.setBytes(&zeroPoint, length: MemoryLayout<Int32>.size, index: bufferIndex)
-      bufferIndex += 1
-
-      encoder.setBytes(&strategy, length: MemoryLayout<UInt32>.size, index: bufferIndex)
-      bufferIndex += 1
-
-      encoder.setBytes(&strategyVersion, length: MemoryLayout<UInt32>.size, index: bufferIndex)
-      bufferIndex += 1
-    }
-
-    let multiHeadParamIndex = bufferIndex
-
-    // Set multi-head parameters at correct indices
+    // Multi-head parameters @8..11
     var numHeads = descriptor.queryShape.numHeads
     var numKVHeads = descriptor.keyShape.numHeads
     var headDimension = UInt32(descriptor.queryShape.headDimension)
     var sequenceLength = descriptor.queryShape.sequenceLength
-
-    encoder.setBytes(&numHeads, length: MemoryLayout<UInt32>.size, index: multiHeadParamIndex)
-    encoder.setBytes(&numKVHeads, length: MemoryLayout<UInt32>.size, index: multiHeadParamIndex + 1)
+    encoder.setBytes(&numHeads, length: MemoryLayout<UInt32>.size, index: 8)
+    encoder.setBytes(&numKVHeads, length: MemoryLayout<UInt32>.size, index: 9)
     encoder.setBytes(
       &headDimension,
       length: MemoryLayout<UInt32>.size,
-      index: multiHeadParamIndex + 2
+      index: 10
     )
     encoder.setBytes(
       &sequenceLength,
       length: MemoryLayout<UInt32>.size,
-      index: multiHeadParamIndex + 3
+      index: 11
     )
 
+    // Mask @12
     if let maskBuffer {
-      encoder.setBuffer(maskBuffer, offset: 0, index: multiHeadParamIndex + 4)
+      encoder.setBuffer(maskBuffer, offset: 0, index: 12)
     } else {
-      encoder.setBuffer(nil, offset: 0, index: multiHeadParamIndex + 4)
+      encoder.setBuffer(nil, offset: 0, index: 12)
     }
 
     // Set threadgroup memory
