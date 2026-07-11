@@ -92,9 +92,15 @@ public class QuantizedAttention {
   }
 
   private let device: MTLDevice
-  private let commandQueue: MTLCommandQueue? // Make optional to handle cleanup safely
+  private let commandQueue: MTLCommandQueue?
   private var pipelineCache: [String: MTLComputePipelineState] = [:]
-  private var isDisposed: Bool = false // Track disposal state
+  private var isDisposed: Bool = false
+
+  /// Set to true via the MFA_DEBUG environment variable to enable verbose
+  /// diagnostic prints (quantization parameters, buffer sizes, samples).
+  private static let debugEnabled: Bool = {
+    ProcessInfo.processInfo.environment["MFA_DEBUG"] != nil
+  }()
 
   public init(device: MTLDevice) {
     self.device = device
@@ -418,7 +424,9 @@ public class QuantizedAttention {
 
         return quantizedTensor
       } catch {
-        print("Warning: Fused quantization failed, falling back to CPU quantization: \(error)")
+        if Self.debugEnabled {
+          print("Warning: Fused quantization failed, falling back to CPU quantization: \(error)")
+        }
         // Fall through to CPU quantization below
       }
     }
@@ -483,9 +491,10 @@ public class QuantizedAttention {
     var floatData = [Float](repeating: 0, count: elementCount)
     let bufferContents = buffer.contents()
 
-    // Add debug logging to check buffer contents
-    print("🔍 convertBufferToFloat: precision=\(inputPrecision), elementCount=\(elementCount)")
-    print("🔍 buffer.length=\(buffer.length), expected=\(elementCount * inputPrecision.size)")
+    if Self.debugEnabled {
+      print("🔍 convertBufferToFloat: precision=\(inputPrecision), elementCount=\(elementCount)")
+      print("🔍 buffer.length=\(buffer.length), expected=\(elementCount * inputPrecision.size)")
+    }
 
     // Validate buffer size
     let expectedSize = elementCount * inputPrecision.size
@@ -522,10 +531,11 @@ public class QuantizedAttention {
       fatalError("Unsupported input precision for runtime quantization: \(inputPrecision)")
     }
 
-    // Debug: Check first few converted values
-    let sampleCount = min(4, elementCount)
-    let sampleValues = Array(floatData.prefix(sampleCount))
-    print("🔍 Converted first \(sampleCount) values: \(sampleValues)")
+    if Self.debugEnabled {
+      let sampleCount = min(4, elementCount)
+      let sampleValues = Array(floatData.prefix(sampleCount))
+      print("🔍 Converted first \(sampleCount) values: \(sampleValues)")
+    }
 
     return floatData
   }
@@ -564,9 +574,6 @@ public class QuantizedAttention {
 
     let cacheKey =
       "\(source.hashValue)_\(hasBlockwiseQ ? 1 : 0)_\(hasBlockwiseK ? 1 : 0)_\(hasBlockwiseV ? 1 : 0)_\(blockSizeUInt)"
-
-    // Clear cache to force regeneration for debugging
-    pipelineCache.removeAll()
 
     if let cached = pipelineCache[cacheKey] {
       return cached
