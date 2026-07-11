@@ -982,11 +982,29 @@ extension QuantizedAttention {
       let commandBuffer = queue.makeCommandBuffer(),
       let keyBinding = makeBinding(for: key, label: "key"),
       let valueBinding = makeBinding(for: value, label: "value"),
-      let dims = descriptor.baseDescriptor.matrixDimensions,
-      let core = getOrCreateCorePipeline(type: .backwardQuery, descriptor: descriptor),
-      let encoder = commandBuffer.makeComputeCommandEncoder()
+      let dims = descriptor.baseDescriptor.matrixDimensions
     else {
       print("Error: Failed to set up backward query")
+      return nil
+    }
+
+    // Detect blockwise quantization for function-constant selection.
+    let bwQ = query.blockScales != nil && query.blockSizeK != nil
+    let bwK = keyBinding.blockScales != nil && keyBinding.blockSize != nil
+    let bwV = valueBinding.blockScales != nil && valueBinding.blockSize != nil
+    let bsK = UInt32(
+      query.blockSizeK ?? keyBinding.blockSize ?? valueBinding.blockSize ?? 1
+    )
+
+    guard
+      let core = getOrCreateCorePipeline(
+        type: .backwardQuery, descriptor: descriptor,
+        hasBlockwiseQ: bwQ, hasBlockwiseK: bwK, hasBlockwiseV: bwV,
+        blockSizeK: bsK
+      ),
+      let encoder = commandBuffer.makeComputeCommandEncoder()
+    else {
+      print("Error: Failed to set up backward query pipeline")
       return nil
     }
 
@@ -1005,7 +1023,7 @@ extension QuantizedAttention {
     encoder.setBuffer(gradOutput, offset: 0, index: 6)
     encoder.setBuffer(gradQuery, offset: 0, index: 9)
 
-    // Per-tensor quant params for quantized Q/K/V (blockwise left null).
+    // Per-tensor + blockwise quant params for quantized Q/K/V.
     bindQuantParams(
       encoder, query: query, key: keyBinding, value: valueBinding,
       config: descriptor.quantizationConfig, startingAt: 10
@@ -1037,11 +1055,29 @@ extension QuantizedAttention {
       let commandBuffer = queue.makeCommandBuffer(),
       let keyBinding = makeBinding(for: key, label: "key"),
       let valueBinding = makeBinding(for: value, label: "value"),
-      let dims = descriptor.baseDescriptor.matrixDimensions,
-      let core = getOrCreateCorePipeline(type: .backwardKeyValue, descriptor: descriptor),
-      let encoder = commandBuffer.makeComputeCommandEncoder()
+      let dims = descriptor.baseDescriptor.matrixDimensions
     else {
       print("Error: Failed to set up backward key-value")
+      return nil
+    }
+
+    // Detect blockwise quantization for function-constant selection.
+    let bwQ = query.blockScales != nil && query.blockSizeK != nil
+    let bwK = keyBinding.blockScales != nil && keyBinding.blockSize != nil
+    let bwV = valueBinding.blockScales != nil && valueBinding.blockSize != nil
+    let bsK = UInt32(
+      query.blockSizeK ?? keyBinding.blockSize ?? valueBinding.blockSize ?? 1
+    )
+
+    guard
+      let core = getOrCreateCorePipeline(
+        type: .backwardKeyValue, descriptor: descriptor,
+        hasBlockwiseQ: bwQ, hasBlockwiseK: bwK, hasBlockwiseV: bwV,
+        blockSizeK: bsK
+      ),
+      let encoder = commandBuffer.makeComputeCommandEncoder()
+    else {
+      print("Error: Failed to set up backward key-value pipeline")
       return nil
     }
 
@@ -1071,17 +1107,22 @@ extension QuantizedAttention {
   // MARK: - Core backward pipeline helpers
 
   /// Build the proven core `AttentionKernel` pipeline for the given type.
-  /// Per-tensor quantization only (HAS_BLOCKWISE_* = false); blockwise buffers
-  /// are emitted by the kernel but left null and never dereferenced.
+  /// Supports both per-tensor and blockwise quantization: `HAS_BLOCKWISE_*`
+  /// function constants are set from the actual operand properties.
   private func getOrCreateCorePipeline(
     type: AttentionKernelType,
-    descriptor: QuantizedAttentionDescriptor
+    descriptor: QuantizedAttentionDescriptor,
+    hasBlockwiseQ: Bool = false,
+    hasBlockwiseK: Bool = false,
+    hasBlockwiseV: Bool = false,
+    blockSizeK: UInt32 = 1
   )
     -> (pipeline: MTLComputePipelineState, kernel: AttentionKernel)?
   {
     let kernel = AttentionKernel(descriptor: descriptor.kernelDescriptor(type: type))
     let source = kernel.createSource()
-    let cacheKey = "core_\(type)_\(source.hashValue)"
+    let cacheKey =
+      "core_\(type)_\(source.hashValue)_\(hasBlockwiseQ ? 1 : 0)\(hasBlockwiseK ? 1 : 0)\(hasBlockwiseV ? 1 : 0)_\(blockSizeK)"
 
     if let cached = pipelineCache[cacheKey] {
       return (cached, kernel)
@@ -1091,10 +1132,10 @@ extension QuantizedAttention {
       let library = try device.makeLibrary(source: source, options: nil)
       let functionConstants = MTLFunctionConstantValues()
       descriptor.baseDescriptor.setFunctionConstants(functionConstants)
-      var bq = false
-      var bk = false
-      var bv = false
-      var blockSize: UInt32 = 1
+      var bq = hasBlockwiseQ
+      var bk = hasBlockwiseK
+      var bv = hasBlockwiseV
+      var blockSize = blockSizeK
       functionConstants.setConstantValue(&bq, type: .bool, index: 5)
       functionConstants.setConstantValue(&bk, type: .bool, index: 6)
       functionConstants.setConstantValue(&bv, type: .bool, index: 7)
@@ -1110,10 +1151,10 @@ extension QuantizedAttention {
     }
   }
 
-  /// Bind per-tensor (scale, zero_point, strategy, strategy_version) for the
-  /// quantized operands among Q/K/V, in bufferBinding order — mirroring
-  /// `AttentionKernel.createBufferBindings` pass 2. Blockwise buffers (pass 3)
-  /// are left null (HAS_BLOCKWISE = false).
+  /// Bind per-tensor (scale, zero_point) for the quantized operands among
+  /// Q/K/V, in bufferBinding order — mirroring `AttentionKernel.createBufferBindings`
+  /// pass 2. Then bind blockwise buffers (pass 3): block_scales and
+  /// block_zero_points per quantized operand.
   private func bindQuantParams(
     _ encoder: MTLComputeCommandEncoder,
     query: QuantizedTensor,
@@ -1123,7 +1164,9 @@ extension QuantizedAttention {
     startingAt start: Int
   ) {
     var index = start
-    func emit(_ scale: Float, _ zeroPoint: Int32) {
+
+    // Pass 2: per-tensor scale and zero_point.
+    func emitScaleZeroPoint(_ scale: Float, _ zeroPoint: Int32) {
       var scale = scale
       encoder.setBytes(&scale, length: MemoryLayout<Float>.size, index: index)
       index += 1
@@ -1132,13 +1175,30 @@ extension QuantizedAttention {
       index += 1
     }
     if config.queryPrecision.requiresQuantizationParameters {
-      emit(query.parameters.scale, Int32(query.parameters.zeroPoint))
+      emitScaleZeroPoint(query.parameters.scale, Int32(query.parameters.zeroPoint))
     }
     if config.keyPrecision.requiresQuantizationParameters {
-      emit(key.scale, key.zeroPoint)
+      emitScaleZeroPoint(key.scale, key.zeroPoint)
     }
     if config.valuePrecision.requiresQuantizationParameters {
-      emit(value.scale, value.zeroPoint)
+      emitScaleZeroPoint(value.scale, value.zeroPoint)
+    }
+
+    // Pass 3: blockwise scales and zero_points (may be nil → per-tensor fallback).
+    func emitBlockBuffers(_ scales: MTLBuffer?, _ zeroPoints: MTLBuffer?) {
+      encoder.setBuffer(scales, offset: 0, index: index)
+      index += 1
+      encoder.setBuffer(zeroPoints, offset: 0, index: index)
+      index += 1
+    }
+    if config.queryPrecision.requiresQuantizationParameters {
+      emitBlockBuffers(query.blockScales, query.blockZeroPoints)
+    }
+    if config.keyPrecision.requiresQuantizationParameters {
+      emitBlockBuffers(key.blockScales, key.blockZeroPoints)
+    }
+    if config.valuePrecision.requiresQuantizationParameters {
+      emitBlockBuffers(value.blockScales, value.blockZeroPoints)
     }
   }
 
@@ -1403,291 +1463,19 @@ extension QuantizedAttention {
     return strides
   }
 
-  private func createQuantizedBackwardPipeline(
-    source: String,
-    functionName: String,
-    cacheSalt: String
-  )
-    -> MTLComputePipelineState?
-  {
-    let cacheKey = "\(functionName)_\(source.hashValue)_\(cacheSalt)"
-
-    if let cached = pipelineCache[cacheKey] {
-      return cached
-    }
-
-    do {
-      let library = try device.makeLibrary(source: source, options: nil)
-      guard let function = library.makeFunction(name: functionName) else {
-        print("Error: Function '\(functionName)' not found in library")
-        return nil
-      }
-      let pipelineState = try device.makeComputePipelineState(function: function)
-
-      pipelineCache[cacheKey] = pipelineState
-      return pipelineState
-    } catch {
-      print("Pipeline creation error for \(functionName): \(error)")
-      return nil
-    }
-  }
-
-  private func generateQuantizedBackwardQueryKernel(descriptor _: QuantizedAttentionDescriptor)
-    -> String
-  {
-    let layout = QuantizedKernelLayoutManifest.layout(for: .backwardQuery)
-
-    // swiftformat:disable: all
-    // swift-format-ignore
-    return """
-        #include <metal_stdlib>
-        using namespace metal;
-
-        // Vectorized dequantization helper
-        METAL_FUNC float4 dequantize_char4(char4 quantized, float scale, int32_t zero_point) {
-            int4 int_vals = int4(quantized);
-            return (float4(int_vals) - float(zero_point)) * scale;
-        }
-
-        // Quantized backward pass: compute dQ
-        kernel void quantized_backward_query(
-            device const char *Q_quantized [[buffer(\(layout.qData))]],      // INT8 quantized query
-            device const char *K_quantized [[buffer(\(layout.kData))]],      // INT8 quantized key
-            device const char *V_quantized [[buffer(\(layout.vData))]],      // INT8 quantized value
-            device const float *dO [[buffer(\(layout.gradOutput))]],         // FP32 output gradients
-            device const float *L [[buffer(\(layout.logsumexp))]],           // FP32 logsumexp from forward
-            device float *dQ [[buffer(\(layout.gradQuery))]],                // FP32 query gradients
-            device float *D [[buffer(\(layout.dValues))]],                   // FP32 intermediate D values
-            constant float &q_scale [[buffer(\(layout.qScale))]],
-            constant int32_t &q_zero_point [[buffer(\(layout.qZeroPoint))]],
-            constant float &k_scale [[buffer(\(layout.kScale))]],
-            constant int32_t &k_zero_point [[buffer(\(layout.kZeroPoint))]],
-            constant float &v_scale [[buffer(\(layout.vScale))]],
-            constant int32_t &v_zero_point [[buffer(\(layout.vZeroPoint))]],
-            device const float *q_block_scales [[buffer(\(layout.qBlockScales))]],
-            device const int32_t *q_block_zero_points [[buffer(\(layout.qBlockZeroPoints))]],
-            device const float *k_block_scales [[buffer(\(layout.kBlockScales))]],
-            device const int32_t *k_block_zero_points [[buffer(\(layout.kBlockZeroPoints))]],
-            device const float *v_block_scales [[buffer(\(layout.vBlockScales))]],
-            device const int32_t *v_block_zero_points [[buffer(\(layout.vBlockZeroPoints))]],
-            constant uint3 &dims [[buffer(\(layout.dims))]],                // {M, N, K}
-            constant float &ste_clip_range [[buffer(\(layout.steClipRange))]],
-            constant int64_t *Q_strides [[buffer(\(layout.qStrides))]],
-            constant int64_t *K_strides [[buffer(\(layout.kStrides))]],
-            constant int64_t *V_strides [[buffer(\(layout.vStrides))]],
-            constant int64_t *O_strides [[buffer(\(layout.oStrides))]],
-            uint2 gid [[thread_position_in_grid]]
-        ) {
-            // Extract dimensions from dims buffer {M, N, K}
-            uint M = dims.x, N = dims.y, K_dim = dims.z;
-            uint row = gid.y, col = gid.x;
-
-            (void)q_block_scales;
-            (void)q_block_zero_points;
-            (void)k_block_scales;
-            (void)k_block_zero_points;
-            (void)v_block_scales;
-            (void)v_block_zero_points;
-            (void)Q_strides;
-            (void)K_strides;
-            (void)V_strides;
-            (void)O_strides;
-
-            if (row >= M || col >= K_dim) return;
-
-            // Dequantize current query element
-            uint q_idx = row * K_dim + col;
-            char q_quantized = Q_quantized[q_idx];
-            float q_dequantized = (float(q_quantized) - float(q_zero_point)) * q_scale;
-
-            // Improved straight-through estimator based on 2024 research
-            float ste_gradient = 1.0f;  // Always use identity gradient
-
-            // Apply soft clipping to the gradient instead of hard zeroing
-            float clip_factor = 1.0f;
-            if (abs(q_dequantized) > ste_clip_range) {
-                clip_factor = ste_clip_range / abs(q_dequantized);
-                clip_factor = max(clip_factor, 0.1f);  // Minimum 10% gradient flow
-            }
-
-            dQ[row * K_dim + col] = 0.0f;
-
-            float dq_accumulator = 0.0f;
-
-            // Compute a simple approximation for D (diagonal correction)
-            float d_approx = 0.0f;
-            if (col == 0) {
-                for (uint k = 0; k < K_dim; k++) {
-                    d_approx += dO[row * K_dim + k];
-                }
-                D[row] = d_approx / float(K_dim); // Normalize to prevent explosion
-            }
-
-            for (uint n = 0; n < N; n++) {
-                // Compute a simple attention weight approximation using dequantized K
-                float qk_dot = 0.0f;
-                for (uint k = 0; k < K_dim; k++) {
-                    float q_val = (float(Q_quantized[row * K_dim + k]) - float(q_zero_point)) * q_scale;
-                    float k_val = (float(K_quantized[n * K_dim + k]) - float(k_zero_point)) * k_scale;
-                    qk_dot += q_val * k_val;
-                }
-
-                float clamped_logit = clamp(qk_dot, -10.0f, 10.0f);
-                float stable_logit = clamped_logit - L[row];
-                float p_val = clamp(exp(stable_logit), 0.0f, 1.0f);
-
-                float grad_factor = p_val * dO[row * K_dim + col];
-                grad_factor *= 0.01f; // Stronger damping factor for numerical stability
-
-                float k_col = (float(K_quantized[n * K_dim + col]) - float(k_zero_point)) * k_scale;
-                float v_col = (float(V_quantized[n * K_dim + col]) - float(v_zero_point)) * v_scale;
-                float combined = 0.5f * (k_col + v_col);
-
-                dq_accumulator += grad_factor * combined;
-            }
-
-            dq_accumulator = clamp(dq_accumulator, -10.0f, 10.0f);
-
-            dQ[row * K_dim + col] = dq_accumulator * ste_gradient * clip_factor;
-        }
-    """
-    // swiftformat:enable: all
-  }
-
-  private func generateQuantizedBackwardKeyValueKernel(descriptor _: QuantizedAttentionDescriptor)
-    -> String
-  {
-    let layout = QuantizedKernelLayoutManifest.layout(for: .backwardKeyValue)
-
-    // swiftformat:disable: all
-    // swift-format-ignore
-    return """
-        #include <metal_stdlib>
-        using namespace metal;
-
-        // Vectorized dequantization helper
-        METAL_FUNC float4 dequantize_char4(char4 quantized, float scale, int32_t zero_point) {
-            int4 int_vals = int4(quantized);
-            return (float4(int_vals) - float(zero_point)) * scale;
-        }
-
-        // Quantized backward pass: compute dK and dV
-        kernel void quantized_backward_key_value(
-            device const char *Q_quantized [[buffer(\(layout.qData))]],      // INT8 quantized query
-            device const char *K_quantized [[buffer(\(layout.kData))]],      // INT8 quantized key
-            device const char *V_quantized [[buffer(\(layout.vData))]],      // INT8 quantized value
-            device const float *dO [[buffer(\(layout.gradOutput))]],         // FP32 output gradients
-            device const float *L [[buffer(\(layout.logsumexp))]],           // FP32 logsumexp from forward
-            device const float *D [[buffer(\(layout.dValues))]],             // FP32 D values from backward_query
-            device float *dK [[buffer(\(layout.gradKey))]],                  // FP32 key gradients
-            device float *dV [[buffer(\(layout.gradValue))]],                // FP32 value gradients
-            constant float &q_scale [[buffer(\(layout.qScale))]],
-            constant int32_t &q_zero_point [[buffer(\(layout.qZeroPoint))]],
-            constant float &k_scale [[buffer(\(layout.kScale))]],
-            constant int32_t &k_zero_point [[buffer(\(layout.kZeroPoint))]],
-            constant float &v_scale [[buffer(\(layout.vScale))]],
-            constant int32_t &v_zero_point [[buffer(\(layout.vZeroPoint))]],
-            device const float *q_block_scales [[buffer(\(layout.qBlockScales))]],
-            device const int32_t *q_block_zero_points [[buffer(\(layout.qBlockZeroPoints))]],
-            device const float *k_block_scales [[buffer(\(layout.kBlockScales))]],
-            device const int32_t *k_block_zero_points [[buffer(\(layout.kBlockZeroPoints))]],
-            device const float *v_block_scales [[buffer(\(layout.vBlockScales))]],
-            device const int32_t *v_block_zero_points [[buffer(\(layout.vBlockZeroPoints))]],
-            constant uint3 &dims [[buffer(\(layout.dims))]],                // {M, N, K}
-            constant float &ste_clip_range [[buffer(\(layout.steClipRange))]],
-            constant int64_t *Q_strides [[buffer(\(layout.qStrides))]],
-            constant int64_t *K_strides [[buffer(\(layout.kStrides))]],
-            constant int64_t *V_strides [[buffer(\(layout.vStrides))]],
-            constant int64_t *O_strides [[buffer(\(layout.oStrides))]],
-            uint2 gid [[thread_position_in_grid]]
-        ) {
-            // Extract dimensions from dims buffer {M, N, K}
-            uint M = dims.x, N = dims.y, K_dim = dims.z;
-
-            (void)q_block_scales;
-            (void)q_block_zero_points;
-            (void)k_block_scales;
-            (void)k_block_zero_points;
-            (void)v_block_scales;
-            (void)v_block_zero_points;
-            (void)Q_strides;
-            (void)K_strides;
-            (void)V_strides;
-            (void)O_strides;
-            uint row = gid.y, col = gid.x;
-
-            if (row >= N || col >= K_dim) return;
-
-            // Dequantize current K and V elements
-            char k_quantized = K_quantized[row * K_dim + col];
-            char v_quantized = V_quantized[row * K_dim + col];
-
-            float k_dequantized = (float(k_quantized) - float(k_zero_point)) * k_scale;
-            float v_dequantized = (float(v_quantized) - float(v_zero_point)) * v_scale;
-
-            // Improved straight-through estimators based on 2024 research
-            float k_ste = 1.0f;  // Always use identity gradient
-            float v_ste = 1.0f;  // Always use identity gradient
-
-            // Apply soft clipping factors instead of hard zeroing
-            float k_clip_factor = 1.0f;
-            float v_clip_factor = 1.0f;
-            if (abs(k_dequantized) > ste_clip_range) {
-                k_clip_factor = ste_clip_range / abs(k_dequantized);
-                k_clip_factor = max(k_clip_factor, 0.1f);  // Minimum 10% gradient flow
-            }
-            if (abs(v_dequantized) > ste_clip_range) {
-                v_clip_factor = ste_clip_range / abs(v_dequantized);
-                v_clip_factor = max(v_clip_factor, 0.1f);  // Minimum 10% gradient flow
-            }
-
-            // Initialize outputs to zero first
-            dK[row * K_dim + col] = 0.0f;
-            dV[row * K_dim + col] = 0.0f;
-
-            // Compute dK and dV with numerical stability
-            float dk_accumulator = 0.0f;
-            float dv_accumulator = 0.0f;
-
-            for (uint m = 0; m < M; m++) {
-                // Compute QK^T dot product for attention weight with stability
-                float qk_dot = 0.0f;
-                for (uint k = 0; k < K_dim; k++) {
-                    float q_k = (float(Q_quantized[m * K_dim + k]) - float(q_zero_point)) * q_scale;
-                    float k_k = (float(K_quantized[row * K_dim + k]) - float(k_zero_point)) * k_scale;
-                    qk_dot += q_k * k_k;
-                }
-
-                // Use stable softmax computation
-                float clamped_qk = clamp(qk_dot, -10.0f, 10.0f);
-                float stable_logit = clamped_qk - L[m];
-                float p_val = exp(stable_logit);
-
-                // Clamp attention weights to reasonable range
-                p_val = clamp(p_val, 0.0f, 1.0f);
-
-                // Simplified dK computation for numerical stability
-                float q_val = (float(Q_quantized[m * K_dim + col]) - float(q_zero_point)) * q_scale;
-                float grad_factor = p_val * dO[m * K_dim + col];
-
-                // Scale down to prevent explosion
-                grad_factor *= 0.1f; // Damping factor
-
-                dk_accumulator += q_val * grad_factor;
-
-                // Simplified dV computation
-                dv_accumulator += p_val * dO[m * K_dim + col] * 0.1f; // Also apply damping
-            }
-
-            // Apply final clamping to prevent NaN/Inf
-            dk_accumulator = clamp(dk_accumulator, -100.0f, 100.0f);
-            dv_accumulator = clamp(dv_accumulator, -100.0f, 100.0f);
-
-            // Apply improved straight-through estimators with soft clipping and store
-            dK[row * K_dim + col] = dk_accumulator * k_ste * k_clip_factor;
-            dV[row * K_dim + col] = dv_accumulator * v_ste * v_clip_factor;
-        }
-    """
-    // swiftformat:enable: all
-  }
+  // STE (straight-through estimator) backward generators were removed.
+  //
+  // The previous implementation (generateQuantizedBackwardQueryKernel /
+  // generateQuantizedBackwardKeyValueKernel) used a naive non-flash backward
+  // with hand-rolled attention weights, soft clipping, and damping factors.
+  // They were never called — the actual backward path dispatches through the
+  // core flash-attention kernel via getOrCreateCorePipeline(.backwardQuery /
+  // .backwardKeyValue), which is exact and leverages the proven flash
+  // algorithm with dequantize-on-load.
+  //
+  // STE for quantization rounding is handled at the C++ autograd level
+  // (MetalFlashAttentionFn in metal_sdpa_backend.cpp): the forward pass
+  // quantizes Q/K/V (fake-quant), and the backward pass passes gradients
+  // straight through the rounding step (STE). This is cleaner and keeps the
+  // Metal kernel focused on the flash-attention math.
 }

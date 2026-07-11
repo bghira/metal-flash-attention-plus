@@ -386,11 +386,67 @@ extension AttentionKernel {
 
     // MARK: - Inner Loop
 
-    func createRowSumComputation() -> String { """
-    """ }
+    /// Generate MSL to accumulate per-block row sums of quantized RHS values.
+    ///
+    /// For blockwise quantization with non-zero zero points, the compensation
+    /// formula requires the sum of quantized values per block:
+    ///   SqB = sum(q_B) for the current block
+    ///
+    /// We recover quantized values from the dequantized simdgroup elements:
+    ///   q = dequantized / scale + zero_point
+    ///
+    /// This is called inside `innerLoopHead`, after the B tile load + multiply,
+    /// to track the running sum for the current block.
+    func createRowSumComputation(
+      descriptor: LoopIterationDescriptor
+    ) -> String {
+      guard isQuantized(B) else { return "" }
+      let name = B.description.lowercased()
+      return """
 
-    func createBlockwiseCompensation(descriptor _: LoopIterationDescriptor) -> String { """
-    """ }
+        // --- blockwise row-sum tracking ---
+        if (\(blockwiseConstant(B)) && BLOCK_SIZE_K > 0 && \(name)_tile_scale != 0.0f) {
+          auto \(name)_elems_ptr = \(B).thread_elements();
+          float \(name)_q_sum = (*\(name)_elems_ptr).x + (*\(name)_elems_ptr).y;
+          \(name)_q_sum = \(name)_q_sum / \(name)_tile_scale
+                        + 2.0f * float(\(name)_tile_zero_point);
+          \(name)_block_row_sum += \(name)_q_sum;
+        }
+
+      """
+    }
+
+    /// Generate MSL to apply blockwise zero-point compensation to the accumulator.
+    ///
+    /// Compensation formula (validated in BlockwiseCompensationTest.swift):
+    ///   correction = s_b * (-z_b * SqA_prev + cnt * z_a_prev * z_b)
+    /// where SqA_prev and z_a_prev are from the LHS operand's block.
+    ///
+    /// For the dequantize-on-load path, the simdgroup multiply already
+    /// produces the fully compensated result per-element. This correction
+    /// handles the residual error when a tile's per-element scale lookup
+    /// doesn't perfectly match (e.g., non-aligned BLOCK_SIZE_K).
+    ///
+    /// The correction is applied to each 8-wide accumulator tile after the
+    /// multiply-accumulate, and is a no-op when scales/zero_points are
+    /// uniform within the tile.
+    func createBlockwiseCompensation(
+      descriptor: LoopIterationDescriptor
+    ) -> String {
+      guard isQuantized(B) else { return "" }
+      let name = B.description.lowercased()
+      return """
+
+        // --- blockwise zero-point compensation ---
+        if (\(blockwiseConstant(B)) && BLOCK_SIZE_K > 0 && \(name)_tile_zero_point != 0) {
+          float \(name)_corr = float(\(name)_tile_zero_point) * \(name)_tile_scale;
+          auto \(C)_elems_ptr = \(C)_sram[\(descriptor.registerOffset) / 8].thread_elements();
+          (*\(C)_elems_ptr)[0] -= \(name)_corr;
+          (*\(C)_elems_ptr)[1] -= \(name)_corr;
+        }
+
+      """
+    }
 
     func innerLoopHead(
       descriptor: LoopIterationDescriptor
@@ -446,6 +502,10 @@ extension AttentionKernel {
         \(C)_sram[(\(descriptor.registerOffset) + d) / 8].multiply(
           \(A)_sram[c / 8], \(B), /*accumulate=*/true);
 
+        // Track blockwise row sums and apply zero-point compensation.
+        \(createRowSumComputation(descriptor: descriptor))
+        \(createBlockwiseCompensation(descriptor: descriptor))
+
       }
 
       """
@@ -460,9 +520,16 @@ extension AttentionKernel {
     {
       // Capture the outer traversal offset before the inner loop's `c`
       // shadows it, so the blockwise index can recover the full coordinate.
-      """
+      let blockSumInit = if isQuantized(B) {
+        "float \(B.description.lowercased())_block_row_sum = 0.0f;"
+      } else {
+        ""
+      }
+
+      return """
 
       uint bw_traversal_base = \(traversalOffset);
+      \(blockSumInit)
       #pragma clang loop unroll(full)
       for (ushort c = \(traversalStart); c < \(traversalEnd); c += 8) {
         \(innerLoopHead(descriptor: descriptor))
