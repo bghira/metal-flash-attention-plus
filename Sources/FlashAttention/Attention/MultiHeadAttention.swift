@@ -495,4 +495,145 @@ public class MultiHeadAttention {
       logsumexp: Int(batchIndex) * Int(qShape.numHeads * qShape.sequenceLength) * 4 // FP32
     )
   }
+
+  // MARK: - Backward
+
+  /// Backward pass for flash attention.
+  ///
+  /// Dispatches `.backwardQuery` (computes D + dQ) then `.backwardKeyValue`
+  /// (computes dK + dV, depends on D) in a single command buffer.
+  public func backward(
+    query: MTLBuffer,
+    key: MTLBuffer,
+    value: MTLBuffer,
+    output: MTLBuffer,
+    dOutput: MTLBuffer,
+    logsumexp: MTLBuffer,
+    dQuery: MTLBuffer,
+    dKey: MTLBuffer,
+    dValue: MTLBuffer,
+    dBuffer: MTLBuffer,
+    descriptor: MultiHeadAttentionDescriptor,
+    maskBuffer: MTLBuffer? = nil
+  )
+    -> MTLCommandBuffer?
+  {
+    guard let commandBuffer = commandQueue.makeCommandBuffer() else {
+      return nil
+    }
+
+    // --- Phase 1: backwardQuery (computes D intermediate + dQ) ---
+    // Buffer bindings (from AttentionKernel.createBufferBindings):
+    // Q@0 K@1 V@2 O@3 L@4 D@5 dO@6 dQ@9
+    // nil strides @10 @11 @12
+    // num_heads@13 num_kv_heads@14 head_dim@15 seq_len@16
+    // nil mask@17
+    let bqKernelDescs = descriptor.kernelDescriptors(type: .backwardQuery)
+    let bqKernel = AttentionKernel(descriptor: bqKernelDescs[0])
+
+    guard
+      let bqPipeline = getOrCreatePipelineState(for: bqKernel, descriptor: descriptor),
+      let bqEncoder = commandBuffer.makeComputeCommandEncoder()
+    else {
+      return nil
+    }
+
+    let bqOpts = MTLCompileOptions()
+    bqOpts.languageVersion = .version3_2
+    _ = bqOpts
+
+    bqEncoder.setComputePipelineState(bqPipeline)
+    bqEncoder.setBuffer(query, offset: 0, index: 0)
+    bqEncoder.setBuffer(key, offset: 0, index: 1)
+    bqEncoder.setBuffer(value, offset: 0, index: 2)
+    bqEncoder.setBuffer(output, offset: 0, index: 3)
+    bqEncoder.setBuffer(logsumexp, offset: 0, index: 4)
+    bqEncoder.setBuffer(dBuffer, offset: 0, index: 5)
+    bqEncoder.setBuffer(dOutput, offset: 0, index: 6)
+    bqEncoder.setBuffer(dQuery, offset: 0, index: 9)
+    // nil strides @10-12
+    bqEncoder.setBuffer(nil, offset: 0, index: 10)
+    bqEncoder.setBuffer(nil, offset: 0, index: 11)
+    bqEncoder.setBuffer(nil, offset: 0, index: 12)
+    // multihead params @13-16
+    var bqNumHeads = descriptor.queryShape.numHeads
+    var bqNumKVHeads = descriptor.keyShape.numHeads
+    var bqHeadDim = UInt32(descriptor.queryShape.headDimension)
+    var bqSeqLen = descriptor.queryShape.sequenceLength
+    bqEncoder.setBytes(&bqNumHeads, length: 4, index: 13)
+    bqEncoder.setBytes(&bqNumKVHeads, length: 4, index: 14)
+    bqEncoder.setBytes(&bqHeadDim, length: 4, index: 15)
+    bqEncoder.setBytes(&bqSeqLen, length: 4, index: 16)
+    bqEncoder.setBuffer(nil, offset: 0, index: 17)
+    bqEncoder.setThreadgroupMemoryLength(Int(bqKernel.threadgroupMemoryAllocation), index: 0)
+
+    let bqBlockCount = ceilDivide(
+      Int(descriptor.queryShape.sequenceLength),
+      Int(bqKernel.blockDimensions.parallelization)
+    )
+    let bqGrid = MTLSize(
+      width: bqBlockCount,
+      height: Int(descriptor.queryShape.numHeads),
+      depth: Int(descriptor.queryShape.batchSize)
+    )
+    let bqGroup = MTLSize(width: Int(bqKernel.threadgroupSize), height: 1, depth: 1)
+    bqEncoder.dispatchThreadgroups(bqGrid, threadsPerThreadgroup: bqGroup)
+    bqEncoder.endEncoding()
+
+    // --- Phase 2: backwardKeyValue (computes dK + dV, depends on D) ---
+    // Buffer bindings:
+    // Q@0 K@1 V@2 L@4 D@5 dO@6 dV@7 dK@8
+    // nil strides @9 @10 @11
+    // num_heads@12 num_kv_heads@13 head_dim@14 seq_len@15
+    // nil mask@16
+    let bkvKernelDescs = descriptor.kernelDescriptors(type: .backwardKeyValue)
+    let bkvKernel = AttentionKernel(descriptor: bkvKernelDescs[0])
+
+    guard
+      let bkvPipeline = getOrCreatePipelineState(for: bkvKernel, descriptor: descriptor),
+      let bkvEncoder = commandBuffer.makeComputeCommandEncoder()
+    else {
+      return nil
+    }
+
+    bkvEncoder.setComputePipelineState(bkvPipeline)
+    bkvEncoder.setBuffer(query, offset: 0, index: 0)
+    bkvEncoder.setBuffer(key, offset: 0, index: 1)
+    bkvEncoder.setBuffer(value, offset: 0, index: 2)
+    bkvEncoder.setBuffer(logsumexp, offset: 0, index: 4)
+    bkvEncoder.setBuffer(dBuffer, offset: 0, index: 5)
+    bkvEncoder.setBuffer(dOutput, offset: 0, index: 6)
+    bkvEncoder.setBuffer(dValue, offset: 0, index: 7)
+    bkvEncoder.setBuffer(dKey, offset: 0, index: 8)
+    // nil strides @9-11
+    bkvEncoder.setBuffer(nil, offset: 0, index: 9)
+    bkvEncoder.setBuffer(nil, offset: 0, index: 10)
+    bkvEncoder.setBuffer(nil, offset: 0, index: 11)
+    // multihead params @12-15
+    var bkvNumHeads = descriptor.queryShape.numHeads
+    var bkvNumKVHeads = descriptor.keyShape.numHeads
+    var bkvHeadDim = UInt32(descriptor.queryShape.headDimension)
+    var bkvSeqLen = descriptor.queryShape.sequenceLength
+    bkvEncoder.setBytes(&bkvNumHeads, length: 4, index: 12)
+    bkvEncoder.setBytes(&bkvNumKVHeads, length: 4, index: 13)
+    bkvEncoder.setBytes(&bkvHeadDim, length: 4, index: 14)
+    bkvEncoder.setBytes(&bkvSeqLen, length: 4, index: 15)
+    bkvEncoder.setBuffer(nil, offset: 0, index: 16)
+    bkvEncoder.setThreadgroupMemoryLength(Int(bkvKernel.threadgroupMemoryAllocation), index: 0)
+
+    let bkvBlockCount = ceilDivide(
+      Int(descriptor.keyShape.sequenceLength),
+      Int(bkvKernel.blockDimensions.parallelization)
+    )
+    let bkvGrid = MTLSize(
+      width: bkvBlockCount,
+      height: Int(descriptor.queryShape.numHeads),
+      depth: Int(descriptor.queryShape.batchSize)
+    )
+    let bkvGroup = MTLSize(width: Int(bkvKernel.threadgroupSize), height: 1, depth: 1)
+    bkvEncoder.dispatchThreadgroups(bkvGrid, threadsPerThreadgroup: bkvGroup)
+    bkvEncoder.endEncoding()
+
+    return commandBuffer
+  }
 }
