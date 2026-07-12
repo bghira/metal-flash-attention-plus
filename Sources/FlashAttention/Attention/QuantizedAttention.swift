@@ -133,7 +133,7 @@ public class QuantizedAttention {
   ///   - value: Value tensor (can be FP32, FP16, or quantized)
   ///   - output: Output tensor buffer
   ///   - descriptor: Quantized attention configuration
-  ///   - bufferOffsets: Byte offsets into Q/K/V/O buffers (for multi-head slicing)
+  ///   - bufferOffsets: Byte offsets into Q/K/V/O/LSE buffers (for multi-head slicing)
   ///   - externalLogsumexp: Optional externally-provided LSE buffer
   /// - Returns: Command buffer for execution
   public func forward(
@@ -142,7 +142,7 @@ public class QuantizedAttention {
     value: QuantizedTensor,
     output: MTLBuffer,
     descriptor: QuantizedAttentionDescriptor,
-    bufferOffsets: (q: Int, k: Int, v: Int, o: Int) = (0, 0, 0, 0),
+    bufferOffsets: (q: Int, k: Int, v: Int, o: Int, lse: Int) = (0, 0, 0, 0, 0),
     externalLogsumexp: MTLBuffer? = nil
   )
     -> MTLCommandBuffer?
@@ -215,7 +215,7 @@ public class QuantizedAttention {
       length: Int(sequenceLength) * MemoryLayout<Float>.size,
       options: .storageModePrivate
     )
-    encoder.setBuffer(logsumexpBuffer, offset: 0, index: 4)
+    encoder.setBuffer(logsumexpBuffer, offset: bufferOffsets.lse, index: 4)
 
     // Quantized operands in Q, K, V order (matches createBufferBindings' sort).
     let quantOperands: [QuantizedTensor] = [query, key, value]
