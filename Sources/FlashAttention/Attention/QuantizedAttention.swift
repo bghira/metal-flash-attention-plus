@@ -139,7 +139,9 @@ public class QuantizedAttention {
     output: MTLBuffer,
     descriptor: QuantizedAttentionDescriptor,
     bufferOffsets: (q: Int, k: Int, v: Int, o: Int, lse: Int) = (0, 0, 0, 0, 0),
-    externalLogsumexp: MTLBuffer? = nil
+    externalLogsumexp: MTLBuffer? = nil,
+    mask: MTLBuffer? = nil,
+    maskOffset: Int = 0
   )
     -> MTLCommandBuffer?
   {
@@ -231,6 +233,17 @@ public class QuantizedAttention {
       bufferIndex += 1
       encoder.setBuffer(operand.blockZeroPoints, offset: 0, index: bufferIndex)
       bufferIndex += 1
+    }
+
+    // Mask: bound at bufferIndex + 3 (strides) + 4 (multi-head params) = +7.
+    // Strides and multi-head are left nil → kernel uses contiguous/single-head
+    // fallback. The mask buffer is a float32 [S_q, S_kv] additive bias for
+    // the current head.
+    let maskIndex = bufferIndex + 7
+    if let mask {
+      encoder.setBuffer(mask, offset: maskOffset, index: maskIndex)
+    } else {
+      encoder.setBuffer(nil, offset: 0, index: maskIndex)
     }
 
     // Use proper threadgroup configuration from AttentionKernel
@@ -1006,7 +1019,9 @@ extension QuantizedAttention {
     gradQuery: MTLBuffer,
     dValues: MTLBuffer,
     descriptor: QuantizedAttentionDescriptor,
-    bufferOffsets: (q: Int, k: Int, v: Int, o: Int, go: Int, lse: Int, gq: Int, dv: Int) = (0, 0, 0, 0, 0, 0, 0, 0)
+    bufferOffsets: (q: Int, k: Int, v: Int, o: Int, go: Int, lse: Int, gq: Int, dv: Int) = (0, 0, 0, 0, 0, 0, 0, 0),
+    mask: MTLBuffer? = nil,
+    maskOffset: Int = 0
   )
     -> MTLCommandBuffer?
   {
@@ -1062,6 +1077,20 @@ extension QuantizedAttention {
       config: descriptor.quantizationConfig, startingAt: 10
     )
 
+    // Bind mask at the expected buffer slot (after quant params + strides
+    // + multi-head params). bindQuantParams emits 4 values per quantized
+    // operand (scale, zero_point, block_scales, block_zero_points).
+    let numQuant = [descriptor.quantizationConfig.queryPrecision,
+                    descriptor.quantizationConfig.keyPrecision,
+                    descriptor.quantizationConfig.valuePrecision]
+      .filter(\.requiresQuantizationParameters).count
+    let maskIdx = 10 + numQuant * 4 + 7
+    if let mask {
+      encoder.setBuffer(mask, offset: maskOffset, index: maskIdx)
+    } else {
+      encoder.setBuffer(nil, offset: 0, index: maskIdx)
+    }
+
     dispatchBackward(encoder, kernel: core.kernel, parallelizationDim: Int(dims.row))
     encoder.endEncoding()
     return commandBuffer
@@ -1080,7 +1109,9 @@ extension QuantizedAttention {
     gradKey: MTLBuffer,
     gradValue: MTLBuffer,
     descriptor: QuantizedAttentionDescriptor,
-    bufferOffsets: (q: Int, k: Int, v: Int, go: Int, lse: Int, dv: Int, gk: Int, gv: Int) = (0, 0, 0, 0, 0, 0, 0, 0)
+    bufferOffsets: (q: Int, k: Int, v: Int, go: Int, lse: Int, dv: Int, gk: Int, gv: Int) = (0, 0, 0, 0, 0, 0, 0, 0),
+    mask: MTLBuffer? = nil,
+    maskOffset: Int = 0
   )
     -> MTLCommandBuffer?
   {
@@ -1132,6 +1163,17 @@ extension QuantizedAttention {
       encoder, query: query, key: keyBinding, value: valueBinding,
       config: descriptor.quantizationConfig, startingAt: 9
     )
+
+    let numQuantKV = [descriptor.quantizationConfig.queryPrecision,
+                      descriptor.quantizationConfig.keyPrecision,
+                      descriptor.quantizationConfig.valuePrecision]
+      .filter(\.requiresQuantizationParameters).count
+    let maskIdxKV = 9 + numQuantKV * 4 + 7
+    if let mask {
+      encoder.setBuffer(mask, offset: maskOffset, index: maskIdxKV)
+    } else {
+      encoder.setBuffer(nil, offset: 0, index: maskIdxKV)
+    }
 
     dispatchBackward(encoder, kernel: core.kernel, parallelizationDim: Int(dims.row))
     encoder.endEncoding()
