@@ -133,13 +133,17 @@ public class QuantizedAttention {
   ///   - value: Value tensor (can be FP32, FP16, or quantized)
   ///   - output: Output tensor buffer
   ///   - descriptor: Quantized attention configuration
+  ///   - bufferOffsets: Byte offsets into Q/K/V/O buffers (for multi-head slicing)
+  ///   - externalLogsumexp: Optional externally-provided LSE buffer
   /// - Returns: Command buffer for execution
   public func forward(
     query: QuantizedTensor,
     key: QuantizedTensor,
     value: QuantizedTensor,
     output: MTLBuffer,
-    descriptor: QuantizedAttentionDescriptor
+    descriptor: QuantizedAttentionDescriptor,
+    bufferOffsets: (q: Int, k: Int, v: Int, o: Int) = (0, 0, 0, 0),
+    externalLogsumexp: MTLBuffer? = nil
   )
     -> MTLCommandBuffer?
   {
@@ -199,16 +203,15 @@ public class QuantizedAttention {
     // The previous dispatch started quant params at index 4 (where L belongs),
     // set M/N/K at positions the kernel doesn't use, and dispatched a single
     // threadgroup regardless of sequence length.
-    encoder.setBuffer(query.data, offset: 0, index: 0)
-    encoder.setBuffer(key.data, offset: 0, index: 1)
-    encoder.setBuffer(value.data, offset: 0, index: 2)
-    encoder.setBuffer(output, offset: 0, index: 3)
+    encoder.setBuffer(query.data, offset: bufferOffsets.q, index: 0)
+    encoder.setBuffer(key.data, offset: bufferOffsets.k, index: 1)
+    encoder.setBuffer(value.data, offset: bufferOffsets.v, index: 2)
+    encoder.setBuffer(output, offset: bufferOffsets.o, index: 3)
 
     let dims = descriptor.baseDescriptor.matrixDimensions!
     let sequenceLength = UInt32(dims.row)
 
-    // L (logsumexp) is always written by the forward kernel.
-    let logsumexpBuffer = device.makeBuffer(
+    let logsumexpBuffer = externalLogsumexp ?? device.makeBuffer(
       length: Int(sequenceLength) * MemoryLayout<Float>.size,
       options: .storageModePrivate
     )
@@ -361,6 +364,39 @@ public class QuantizedAttention {
       targetQuantization: targetQuantization,
       quantizationMode: quantizationMode,
       descriptor: descriptor
+    )
+  }
+
+  /// Public wrapper for runtime quantization from an FP32/FP16/BF16 buffer.
+  /// Used by the multi-head quantized FFI to quantize full BHSD tensors.
+  public func createQuantizedTensorFromBufferPublic(
+    buffer: MTLBuffer,
+    shape: [Int],
+    inputPrecision: GEMMOperandPrecision,
+    targetPrecision: GEMMOperandPrecision,
+    quantizationMode: QuantizationMode,
+    targetStrategy: QuantizationStrategy
+  )
+    -> QuantizedTensor?
+  {
+    guard targetPrecision.requiresQuantizationParameters else {
+      let parameters = QuantizationParameters(
+        scale: 1.0, zeroPoint: 0,
+        precision: targetPrecision,
+        mode: quantizationMode,
+        strategy: targetStrategy
+      )
+      return QuantizedTensor(
+        device: device, data: buffer, parameters: parameters,
+        elementCount: shape.reduce(1, *), shape: shape
+      )
+    }
+    return createQuantizedTensorFromBuffer(
+      buffer: buffer, shape: shape,
+      inputPrecision: inputPrecision,
+      targetPrecision: targetPrecision,
+      quantizationMode: quantizationMode,
+      targetStrategy: targetStrategy
     )
   }
 
@@ -973,7 +1009,8 @@ extension QuantizedAttention {
     logsumexp: MTLBuffer,
     gradQuery: MTLBuffer,
     dValues: MTLBuffer,
-    descriptor: QuantizedAttentionDescriptor
+    descriptor: QuantizedAttentionDescriptor,
+    bufferOffsets: (q: Int, k: Int, v: Int, o: Int, go: Int, lse: Int, gq: Int, dv: Int) = (0, 0, 0, 0, 0, 0, 0, 0)
   )
     -> MTLCommandBuffer?
   {
@@ -1014,14 +1051,14 @@ extension QuantizedAttention {
     // Operands (AttentionKernel.createBufferBindings, single-head layout):
     //   Q@0 K@1 V@2 O@3 L@4 D@5 dO@6 ... dQ@9
     // Strides / multi-head / mask left unset → null → single-head mode.
-    encoder.setBuffer(query.data, offset: 0, index: 0)
-    encoder.setBuffer(keyBinding.buffer, offset: 0, index: 1)
-    encoder.setBuffer(valueBinding.buffer, offset: 0, index: 2)
-    encoder.setBuffer(output, offset: 0, index: 3)
-    encoder.setBuffer(logsumexp, offset: 0, index: 4)
-    encoder.setBuffer(dValues, offset: 0, index: 5)
-    encoder.setBuffer(gradOutput, offset: 0, index: 6)
-    encoder.setBuffer(gradQuery, offset: 0, index: 9)
+    encoder.setBuffer(query.data, offset: bufferOffsets.q, index: 0)
+    encoder.setBuffer(keyBinding.buffer, offset: bufferOffsets.k, index: 1)
+    encoder.setBuffer(valueBinding.buffer, offset: bufferOffsets.v, index: 2)
+    encoder.setBuffer(output, offset: bufferOffsets.o, index: 3)
+    encoder.setBuffer(logsumexp, offset: bufferOffsets.lse, index: 4)
+    encoder.setBuffer(dValues, offset: bufferOffsets.dv, index: 5)
+    encoder.setBuffer(gradOutput, offset: bufferOffsets.go, index: 6)
+    encoder.setBuffer(gradQuery, offset: bufferOffsets.gq, index: 9)
 
     // Per-tensor + blockwise quant params for quantized Q/K/V.
     bindQuantParams(
@@ -1046,7 +1083,8 @@ extension QuantizedAttention {
     dValues: MTLBuffer,
     gradKey: MTLBuffer,
     gradValue: MTLBuffer,
-    descriptor: QuantizedAttentionDescriptor
+    descriptor: QuantizedAttentionDescriptor,
+    bufferOffsets: (q: Int, k: Int, v: Int, go: Int, lse: Int, dv: Int, gk: Int, gv: Int) = (0, 0, 0, 0, 0, 0, 0, 0)
   )
     -> MTLCommandBuffer?
   {
@@ -1085,14 +1123,14 @@ extension QuantizedAttention {
     encoder.setThreadgroupMemoryLength(Int(core.kernel.threadgroupMemoryAllocation), index: 0)
 
     // Operands: Q@0 K@1 V@2 L@4 D@5 dO@6 dV@7 dK@8
-    encoder.setBuffer(query.data, offset: 0, index: 0)
-    encoder.setBuffer(keyBinding.buffer, offset: 0, index: 1)
-    encoder.setBuffer(valueBinding.buffer, offset: 0, index: 2)
-    encoder.setBuffer(logsumexp, offset: 0, index: 4)
-    encoder.setBuffer(dValues, offset: 0, index: 5)
-    encoder.setBuffer(gradOutput, offset: 0, index: 6)
-    encoder.setBuffer(gradValue, offset: 0, index: 7)
-    encoder.setBuffer(gradKey, offset: 0, index: 8)
+    encoder.setBuffer(query.data, offset: bufferOffsets.q, index: 0)
+    encoder.setBuffer(keyBinding.buffer, offset: bufferOffsets.k, index: 1)
+    encoder.setBuffer(valueBinding.buffer, offset: bufferOffsets.v, index: 2)
+    encoder.setBuffer(logsumexp, offset: bufferOffsets.lse, index: 4)
+    encoder.setBuffer(dValues, offset: bufferOffsets.dv, index: 5)
+    encoder.setBuffer(gradOutput, offset: bufferOffsets.go, index: 6)
+    encoder.setBuffer(gradValue, offset: bufferOffsets.gv, index: 7)
+    encoder.setBuffer(gradKey, offset: bufferOffsets.gk, index: 8)
 
     bindQuantParams(
       encoder, query: query, key: keyBinding, value: valueBinding,
