@@ -110,18 +110,14 @@ public class QuantizedAttention {
     commandQueue = queue
   }
 
-  /// Safe disposal method to prevent crashes during Swift ARC cleanup
+  /// Safe disposal method to prevent crashes during Swift ARC cleanup.
+  /// Does NOT call pipelineCache.removeAll() — that can trigger Metal
+  /// driver callbacks during process teardown and SIGABRT. ARC releases
+  /// the dictionary and its MTLComputePipelineState values automatically.
   private func dispose() {
-    guard !isDisposed else { return }
-
-    // Clear pipeline cache safely
-    pipelineCache.removeAll()
-
-    // Mark as disposed to prevent double-cleanup
     isDisposed = true
   }
 
-  /// Swift deinitializer with defensive guards
   deinit {
     dispose()
   }
