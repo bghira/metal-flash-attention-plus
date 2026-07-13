@@ -162,7 +162,14 @@ public extension AttentionDescriptor {
 
     // Inputs have the same register precision across kernels.
     if lowPrecisionInputs {
-      let inputRegisterPrecision: GEMMOperandPrecision = resolvedInputPrecision == .BF16 ? .BF16 : .FP16
+      // BF16 register operands require Apple9 (M3+) hardware; older GPUs
+      // fault on bfloat simdgroup matmuls. Below Apple9, keep BF16 in
+      // memory and widen to FP32 registers via load_bfloat (the original,
+      // hardware-independent path). FP16 registers are native everywhere.
+      let inputRegisterPrecision: GEMMOperandPrecision =
+        resolvedInputPrecision == .BF16
+          ? (hasNativeBF16Casting ? .BF16 : .FP32)
+          : .FP16
       registerPrecisions[.Q] = inputRegisterPrecision
       registerPrecisions[.K] = inputRegisterPrecision
       registerPrecisions[.V] = inputRegisterPrecision
