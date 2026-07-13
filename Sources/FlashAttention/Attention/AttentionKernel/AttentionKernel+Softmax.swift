@@ -306,23 +306,26 @@ extension AttentionKernel {
     if (mask_buffer_bytes != nullptr && !HAS_SPARSE_RANGES && !HAS_BLOCK_SPARSE) {
       auto mask_buffer = reinterpret_cast<device const float*>(mask_buffer_bytes);
       uint row_idx = \(parallelizationGroupOffset) + morton_offset.y;
-      uint col_base = \(traversalOffset) + c + morton_offset.x;
 
       if (row_idx < R) {
-        auto S_elements = S_sram[c / 8].thread_elements();
+        uint effective_num_heads = (num_heads_ptr != nullptr) ? *num_heads_ptr : 1u;
+        uint effective_batch = (num_heads_ptr != nullptr) ? batch_id : 0u;
+        uint effective_head = (num_heads_ptr != nullptr) ? head_id : 0u;
+        ulong mask_head_offset = (((ulong)effective_batch * (ulong)effective_num_heads) + (ulong)effective_head) * (ulong)R;
+        mask_head_offset = (mask_head_offset + (ulong)row_idx) * (ulong)C;
 
         #pragma clang loop unroll(full)
-        for (ushort index = 0; index < 2; ++index) {
-          uint col_idx = col_base + index;
-          if (col_idx < C) {
-            uint effective_num_heads = (num_heads_ptr != nullptr) ? *num_heads_ptr : 1u;
-            uint effective_batch = (num_heads_ptr != nullptr) ? batch_id : 0u;
-            uint effective_head = (num_heads_ptr != nullptr) ? head_id : 0u;
+        for (ushort tc = 0; tc < \(blockDimensions.traversal); tc += 8) {
+          auto S_elements = S_sram[tc / 8].thread_elements();
+          uint col_base = \(traversalOffset) + tc + morton_offset.x;
 
-            ulong mask_index = (((ulong)effective_batch * (ulong)effective_num_heads) + (ulong)effective_head) * (ulong)R;
-            mask_index = (mask_index + (ulong)row_idx) * (ulong)C + (ulong)col_idx;
-            float mask_value = *(mask_buffer + mask_index);
-            (*S_elements)[index] += mask_value;
+          #pragma clang loop unroll(full)
+          for (ushort index = 0; index < 2; ++index) {
+            uint col_idx = col_base + index;
+            if (col_idx < C) {
+              float mask_value = *(mask_buffer + mask_head_offset + (ulong)col_idx);
+              (*S_elements)[index] += mask_value;
+            }
           }
         }
       }
