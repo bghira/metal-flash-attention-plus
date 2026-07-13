@@ -5,6 +5,8 @@
 //  Created by Philip Turner on 8/20/24.
 //
 
+import Foundation
+
 public extension AttentionDescriptor {
   // This is an expensive computed property. Access it sparingly!
   var memoryPrecisions: [AttentionOperand: GEMMOperandPrecision] {
@@ -154,7 +156,12 @@ public extension AttentionDescriptor {
     // Query whether the hardware fuses the promotion of BF16 to FP32 with
     // the FMA assembly instruction.
     let device = MTLContext.global.device
+    // MFA_FORCE_NO_NATIVE_BF16=1 pretends the GPU lacks Apple9 bfloat
+    // support so the pre-Apple9 register selection (BF16 memory widened to
+    // FP32 registers) can be validated on newer hardware. Hardware fault
+    // behavior of real M1/M2 obviously cannot be simulated this way.
     let hasNativeBF16Casting = device.supportsFamily(.apple9)
+      && ProcessInfo.processInfo.environment["MFA_FORCE_NO_NATIVE_BF16"] != "1"
 
     // BF16 softmax/backward accumulators stay FP32; Q/K/V can remain BF16 on
     // Apple9 because the matrix multiply intrinsic accumulates into FP32.
