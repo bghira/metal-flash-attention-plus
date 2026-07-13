@@ -131,10 +131,13 @@ extension AttentionDescriptor {
   /// If any of the operands is FP16, the parameters will fail to generalize.
   static func forward(device: MTLDevice) -> String {
     if device.supportsFamily(.apple9) {
+      // For head_dim 128, cache one operand only; Q,O spills registers and is much slower.
       """
       | 8   | 16 | 128 | 16 | Q, O |
       | 16  | 16 | 64  | 16 | Q, O |
       | 48  | 16 | 32  | 8  | Q, O |
+      | 127 | 16 | 64  | 16 | O    |
+      | 128 | 32 | 80  | 16 | O    |
       | 192 | 16 | 64  | 16 | O    |
       | 384 | 16 | 128 | 16 |      |
 

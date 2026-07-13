@@ -9,12 +9,13 @@ public extension AttentionDescriptor {
   // This is an expensive computed property. Access it sparingly!
   var memoryPrecisions: [AttentionOperand: GEMMOperandPrecision] {
     var memoryPrecisions: [AttentionOperand: GEMMOperandPrecision] = [:]
+    let resolvedInputPrecision = inputMemoryPrecision ?? .FP16
 
     if lowPrecisionInputs {
-      memoryPrecisions[.Q] = .FP16
-      memoryPrecisions[.K] = .FP16
-      memoryPrecisions[.V] = .FP16
-      memoryPrecisions[.dO] = .BF16
+      memoryPrecisions[.Q] = resolvedInputPrecision
+      memoryPrecisions[.K] = resolvedInputPrecision
+      memoryPrecisions[.V] = resolvedInputPrecision
+      memoryPrecisions[.dO] = resolvedInputPrecision
     } else {
       memoryPrecisions[.Q] = .FP32
       memoryPrecisions[.K] = .FP32
@@ -148,21 +149,23 @@ public extension AttentionDescriptor {
   // This is an expensive computed property. Access it sparingly!
   var registerPrecisions: [AttentionOperand: GEMMOperandPrecision] {
     var registerPrecisions: [AttentionOperand: GEMMOperandPrecision] = [:]
+    let resolvedInputPrecision = inputMemoryPrecision ?? .FP16
 
     // Query whether the hardware fuses the promotion of BF16 to FP32 with
     // the FMA assembly instruction.
     let device = MTLContext.global.device
     let hasNativeBF16Casting = device.supportsFamily(.apple9)
 
-    // BF16 inputs should use FP32 register precision for accumulation to avoid
-    // overflow/underflow in complex attention patterns that stress accumulation precision
+    // BF16 softmax/backward accumulators stay FP32; Q/K/V can remain BF16 on
+    // Apple9 because the matrix multiply intrinsic accumulates into FP32.
     let forceFP32AccumulationForBF16 = true
 
     // Inputs have the same register precision across kernels.
     if lowPrecisionInputs {
-      registerPrecisions[.Q] = .FP16
-      registerPrecisions[.K] = .FP16
-      registerPrecisions[.V] = .FP16
+      let inputRegisterPrecision: GEMMOperandPrecision = resolvedInputPrecision == .BF16 ? .BF16 : .FP16
+      registerPrecisions[.Q] = inputRegisterPrecision
+      registerPrecisions[.K] = inputRegisterPrecision
+      registerPrecisions[.V] = inputRegisterPrecision
       // Always use FP32 for BF16 dO register precision to prevent accumulation NaNs
       registerPrecisions[.dO] = (hasNativeBF16Casting && !forceFP32AccumulationForBF16) ? .BF16 :
         .FP32
@@ -202,7 +205,7 @@ public extension AttentionDescriptor {
       // FP16 (Q, K, S) | 5e-2
       // FP16 (P)       | 2.7e-3
       // BF16 (dS)      | 8e-3
-      registerPrecisions[.S] = lowPrecisionInputs ? .FP16 : .FP32
+      registerPrecisions[.S] = lowPrecisionInputs && resolvedInputPrecision == .FP16 ? .FP16 : .FP32
       registerPrecisions[.P] = .FP16
       registerPrecisions[.dP] = .FP32
       // Always use FP32 for BF16 dS register precision to prevent accumulation NaNs

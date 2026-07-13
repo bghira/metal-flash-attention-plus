@@ -512,11 +512,15 @@ extension AttentionKernel {
 
               // Optimized causal masking using bitmask approach (transposed)
               if (IS_CAUSAL) {
-                // Pre-compute causal mask for 2-element vector
-                uint causal_mask = 0;
-                if (col_idx >= row_base) {
-                  uint mask_width = min(2u, col_idx - row_base + 1);
-                  causal_mask = (1u << mask_width) - 1;
+                // Transposed tile: row_idx is the Q position, col_idx the KV
+                // position. Causal keeps q_row >= kv_col, so element `index`
+                // is kept iff row_base + index >= col_idx. (The previous
+                // formula kept the inverted triangle, corrupting dK/dV for
+                // every shape whose heuristic picked the bitmask path.)
+                uint causal_mask = 0b11;
+                if (col_idx > row_base) {
+                  uint shift = col_idx - row_base;
+                  causal_mask = (shift >= 2) ? 0u : ((0b11u << shift) & 0b11u);
                 }
 
                 #pragma clang loop unroll(full)

@@ -298,9 +298,17 @@ extension AttentionKernel {
 
   func leadingDimension(_ operand: AttentionOperand) -> String {
     if transposed(operand) {
-      sequenceLength(operand)
-    } else {
-      "\(headDimension)"
+      return sequenceLength(operand)
+    }
+    // Q/K/V device tiles use runtime leading dimensions (declared at the top
+    // of the kernel body) so strided views — rows strides[2] elements apart,
+    // contiguous last dim — address correctly. All other operands (O, dO,
+    // dQ, ...) are dense host allocations with leading dimension = head dim.
+    switch operand {
+    case .Q: return "Q_ld"
+    case .K: return "K_ld"
+    case .V: return "V_ld"
+    default: return "\(headDimension)"
     }
   }
 

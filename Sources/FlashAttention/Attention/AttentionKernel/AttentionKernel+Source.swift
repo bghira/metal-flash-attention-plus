@@ -43,6 +43,16 @@ public extension AttentionKernel {
     ) {
       ushort2 morton_offset = morton_order(lane_id);
 
+      // Runtime leading dimensions for device-memory tiles of Q/K/V.
+      // With stride buffers bound (ELEMENT strides, BHSD order), rows
+      // within a head are strides[2] elements apart; the last dim must be
+      // contiguous. Without strides the tensors are contiguous and the
+      // leading dimension is the head dimension.
+      uint Q_ld = (Q_strides != nullptr) ? uint(Q_strides[2]) : \(headDimension);
+      uint K_ld = (K_strides != nullptr) ? uint(K_strides[2]) : \(headDimension);
+      uint V_ld = (V_strides != nullptr) ? uint(V_strides[2]) : \(headDimension);
+      (void)Q_ld; (void)K_ld; (void)V_ld;
+
       // Extract dimensions from 3D grid position
       uint block_id = gid.x;    // Sequence block index
       uint head_id = gid.y;     // Head index
@@ -80,25 +90,35 @@ public extension AttentionKernel {
         // Check if stride information is provided for non-contiguous tensor support
         uint q_batch_head_offset = 0;
         uint kv_batch_head_offset = 0;
+        uint v_batch_head_offset = 0;
         uint o_batch_head_offset = 0;
 
         if (Q_strides != nullptr) {
-          // Use stride-based offset calculation for non-contiguous tensors
-          // Assuming 4D tensor layout: [batch, seq, heads, dim] or [batch, heads, seq, dim]
-          // Strides tell us how to calculate the actual memory offset
-          q_batch_head_offset = batch_id * Q_strides[0] + head_id * Q_strides[2];
+          // Stride-based offsets for non-contiguous tensors. Strides are
+          // ELEMENT strides in BHSD order: [batch, head, seq, dim]. The
+          // last dim must be contiguous (stride 1); the seq stride feeds
+          // tile addressing via the runtime leading dimension below.
+          q_batch_head_offset = batch_id * uint(Q_strides[0]) + head_id * uint(Q_strides[1]);
         } else {
           // Fallback to contiguous layout assumption
           q_batch_head_offset = (batch_id * num_heads + head_id) * sequence_length * head_dimension;
         }
 
-        if (K_strides != nullptr && V_strides != nullptr) {
-          kv_batch_head_offset = batch_id * K_strides[0] + kv_head_id * K_strides[2];
+        if (K_strides != nullptr) {
+          kv_batch_head_offset = batch_id * uint(K_strides[0]) + kv_head_id * uint(K_strides[1]);
         } else {
           kv_batch_head_offset = (batch_id * num_kv_heads + kv_head_id) * sequence_length * head_dimension;
         }
 
-        o_batch_head_offset = q_batch_head_offset;  // Output has same shape as query
+        if (V_strides != nullptr) {
+          v_batch_head_offset = batch_id * uint(V_strides[0]) + kv_head_id * uint(V_strides[1]);
+        } else {
+          v_batch_head_offset = (batch_id * num_kv_heads + kv_head_id) * sequence_length * head_dimension;
+        }
+
+        // O is always a dense contiguous allocation (the host allocates it),
+        // even when Q is a strided view — never reuse Q's strided offset.
+        o_batch_head_offset = (batch_id * num_heads + head_id) * sequence_length * head_dimension;
 
         // Apply offsets to buffer pointers based on kernel type
         // Only apply offsets if we have multiple heads or batches
@@ -136,7 +156,7 @@ extension AttentionKernel {
       """
       Q = Q + q_batch_head_offset;
       K = K + kv_batch_head_offset;
-      V = V + kv_batch_head_offset;
+      V = V + v_batch_head_offset;
       O = O + o_batch_head_offset;
       L = L + (batch_id * num_heads + head_id) * sequence_length;
       """
@@ -144,7 +164,7 @@ extension AttentionKernel {
       """
       Q = Q + q_batch_head_offset;
       K = K + kv_batch_head_offset;
-      V = V + kv_batch_head_offset;
+      V = V + v_batch_head_offset;
       O = O + o_batch_head_offset;
       dO = dO + o_batch_head_offset;
       dQ = dQ + q_batch_head_offset;
@@ -158,7 +178,7 @@ extension AttentionKernel {
       """
       Q = Q + q_batch_head_offset;
       K = K + kv_batch_head_offset;
-      V = V + kv_batch_head_offset;
+      V = V + v_batch_head_offset;
       dO = dO + o_batch_head_offset;
       dV = dV + kv_batch_head_offset;
       dK = dK + kv_batch_head_offset;
