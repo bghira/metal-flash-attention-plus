@@ -190,6 +190,49 @@ public class MultiHeadAttention {
     return commandBuffer
   }
 
+  /// Encode the forward pass into a caller-provided command buffer without
+  /// committing it. This lets the host integrate attention into an external
+  /// stream (e.g. PyTorch's MPS stream) so no cross-queue synchronization is
+  /// needed around the dispatch. Buffer offsets are in bytes.
+  public func encodeForward(
+    commandBuffer: MTLCommandBuffer,
+    query: MTLBuffer,
+    key: MTLBuffer,
+    value: MTLBuffer,
+    output: MTLBuffer,
+    queryOffset: Int = 0,
+    keyOffset: Int = 0,
+    valueOffset: Int = 0,
+    outputOffset: Int = 0,
+    queryStrides: [Int64]? = nil,
+    keyStrides: [Int64]? = nil,
+    valueStrides: [Int64]? = nil,
+    logsumexp: MTLBuffer? = nil,
+    descriptor: MultiHeadAttentionDescriptor,
+    maskBuffer: MTLBuffer? = nil
+  )
+    -> Bool
+  {
+    var resolvedDescriptor = descriptor
+    if var sparseMask = resolvedDescriptor.baseDescriptor.sparseMask {
+      sparseMask.isMQA = resolvedDescriptor.broadcastMode.isMultiQuery
+      sparseMask.numKVHeads = resolvedDescriptor.keyShape.numHeads
+      resolvedDescriptor.baseDescriptor.sparseMask = sparseMask
+    }
+    let resolvedMaskBuffer = maskBuffer ?? resolvedDescriptor.baseDescriptor.sparseMask?.maskBuffer
+
+    return dispatchBatched(
+      commandBuffer: commandBuffer,
+      query: query, key: key, value: value, output: output,
+      queryOffset: queryOffset, keyOffset: keyOffset,
+      valueOffset: valueOffset, outputOffset: outputOffset,
+      queryStrides: queryStrides, keyStrides: keyStrides,
+      valueStrides: valueStrides,
+      logsumexp: logsumexp, descriptor: resolvedDescriptor,
+      maskBuffer: resolvedMaskBuffer
+    ) != nil
+  }
+
   /// Dispatch strategy: unified dispatch with all batches and heads in parallel
   private func dispatchPerBatch(
     commandBuffer: MTLCommandBuffer,
@@ -212,6 +255,8 @@ public class MultiHeadAttention {
   private func dispatchBatched(
     commandBuffer: MTLCommandBuffer,
     query: MTLBuffer, key: MTLBuffer, value: MTLBuffer, output: MTLBuffer,
+    queryOffset: Int = 0, keyOffset: Int = 0, valueOffset: Int = 0, outputOffset: Int = 0,
+    queryStrides: [Int64]? = nil, keyStrides: [Int64]? = nil, valueStrides: [Int64]? = nil,
     logsumexp: MTLBuffer?, descriptor: MultiHeadAttentionDescriptor,
     maskBuffer: MTLBuffer?
   )
@@ -240,10 +285,10 @@ public class MultiHeadAttention {
     // (see AttentionKernel.createBufferBindings): Q@0 K@1 V@2 O@3 L@4,
     // then (for non-quantized kernels) Q_strides@5 K_strides@6 V_strides@7,
     // then num_heads@8 num_kv_heads@9 head_dim@10 seq@11, then mask@12.
-    encoder.setBuffer(query, offset: 0, index: 0)
-    encoder.setBuffer(key, offset: 0, index: 1)
-    encoder.setBuffer(value, offset: 0, index: 2)
-    encoder.setBuffer(output, offset: 0, index: 3)
+    encoder.setBuffer(query, offset: queryOffset, index: 0)
+    encoder.setBuffer(key, offset: keyOffset, index: 1)
+    encoder.setBuffer(value, offset: valueOffset, index: 2)
+    encoder.setBuffer(output, offset: outputOffset, index: 3)
 
     // The kernel always writes L (logsumexp). Provide a scratch buffer for
     // forward-only calls that pass logsumexp=nil, otherwise the kernel writes
@@ -273,14 +318,22 @@ public class MultiHeadAttention {
     }
     encoder.setBuffer(lBuffer, offset: 0, index: 4)
 
-    // Strides @5/6/7: bind nil so the kernel uses its contiguous-fallback
-    // offset math (batch*num_heads + head) * seq * dim, which matches the
-    // contiguous BHSD layout the host now passes. (The kernel's stride-index
-    // path reads head stride from the wrong array slot; the contiguous path
-    // is correct, so disable the stride path by passing null.)
-    encoder.setBuffer(nil, offset: 0, index: 5)
-    encoder.setBuffer(nil, offset: 0, index: 6)
-    encoder.setBuffer(nil, offset: 0, index: 7)
+    // Strides @5/6/7: ELEMENT strides in BHSD order, last dim must be
+    // contiguous (stride 1). When nil, the kernel uses its contiguous
+    // offset math (batch*num_heads + head) * seq * dim and a leading
+    // dimension equal to the head dimension.
+    let strideBindings: [(Int, [Int64]?)] = [
+      (5, queryStrides), (6, keyStrides), (7, valueStrides),
+    ]
+    for (index, strides) in strideBindings {
+      if let strides, strides.count == 4 {
+        strides.withUnsafeBytes { raw in
+          encoder.setBytes(raw.baseAddress!, length: raw.count, index: index)
+        }
+      } else {
+        encoder.setBuffer(nil, offset: 0, index: index)
+      }
+    }
 
     // Multi-head parameters @8..11
     var numHeads = descriptor.queryShape.numHeads
@@ -378,7 +431,23 @@ public class MultiHeadAttention {
     -> MTLComputePipelineState?
   {
     let source = kernel.createSource()
-    let cacheKey = String(source.hashValue)
+    // The compiled pipeline bakes in function constants (matrix dimensions,
+    // causal flag, window size) that are NOT part of the generated source —
+    // the source is dimension-generic. Keying by source hash alone returns a
+    // pipeline compiled for a DIFFERENT shape whenever two shapes share
+    // codegen, which corrupts memory (the kernel runs with the wrong baked-in
+    // row/column dimensions). Include every setFunctionConstants input in
+    // the key.
+    let base = descriptor.baseDescriptor
+    let dims = base.matrixDimensions.map { "\($0.row)x\($0.column)x\($0.head)" } ?? "nil"
+    var sparsity = "none"
+    switch base.sparsityPattern {
+    case .none: sparsity = "none"
+    case .causal: sparsity = "causal"
+    case let .slidingWindow(size): sparsity = "window\(size)"
+    case .custom: sparsity = "custom"
+    }
+    let cacheKey = "\(source.hashValue)_\(dims)_\(sparsity)"
 
     if let cached = pipelineCache[cacheKey] {
       return cached
