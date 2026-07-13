@@ -17,6 +17,7 @@ public enum SparsityPattern {
 public struct AttentionDescriptor {
   // Q, K, V, dO
   public var lowPrecisionInputs: Bool = false
+  public var inputMemoryPrecision: GEMMOperandPrecision?
 
   // S, P, L, D, dP, dS
   public var lowPrecisionIntermediates: Bool = false
