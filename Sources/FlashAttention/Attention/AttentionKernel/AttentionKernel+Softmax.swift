@@ -285,14 +285,16 @@ extension AttentionKernel {
 
     return """
 
-    // Apply sparsity patterns
+    // Apply sparsity patterns. The loop variable must not be named 'c' —
+    // that shadows the outer traversal offset the codegen interpolates into
+    // col_base, which breaks causal masking for every non-first KV block.
     if (IS_CAUSAL || HAS_SLIDING_WINDOW || HAS_SPARSE_RANGES || HAS_BLOCK_SPARSE) {
       const \(registerName(.S)) mask_value =
       (0.875 / \(logBase2E)) * -numeric_limits<\(registerName(.S))>::max();
 
       #pragma clang loop unroll(full)
-      for (ushort c = 0; c < \(blockDim); c += 8) {
-        auto S_elements = S_sram[c / 8].thread_elements();
+      for (ushort tc = 0; tc < \(blockDim); tc += 8) {
+        auto S_elements = S_sram[tc / 8].thread_elements();
 
         \(useBitmaskOptimization ? generateBitmaskMasking() : generateElementwiseMasking())
       }
@@ -305,7 +307,7 @@ extension AttentionKernel {
     """
     if (mask_buffer_bytes != nullptr && !HAS_SPARSE_RANGES && !HAS_BLOCK_SPARSE) {
       auto mask_buffer = reinterpret_cast<device const float*>(mask_buffer_bytes);
-      uint row_idx = \(parallelizationGroupOffset) + morton_offset.y;
+      uint row_idx = \(unsafeParallelizationThreadOffset);
 
       if (row_idx < R) {
         uint effective_num_heads = (num_heads_ptr != nullptr) ? *num_heads_ptr : 1u;
@@ -353,8 +355,8 @@ extension AttentionKernel {
   private func generateBitmaskMasking() -> String {
     """
               // GLUON-inspired vectorized masking for Metal SIMD (Auto-optimized)
-              uint row_idx = \(parallelizationGroupOffset) + morton_offset.y;
-              uint col_base = \(traversalOffset) + c + morton_offset.x;
+              uint row_idx = \(unsafeParallelizationThreadOffset);
+              uint col_base = \(traversalOffset) + tc + morton_offset.x;
 
               ulong sparse_head_offset = 0;
               if (HAS_SPARSE_RANGES) {
@@ -431,11 +433,11 @@ extension AttentionKernel {
   private func generateElementwiseMasking() -> String {
     """
               // Traditional element-wise masking (Auto-optimized for large problems)
-              uint row_idx = \(parallelizationGroupOffset) + morton_offset.y;
+              uint row_idx = \(unsafeParallelizationThreadOffset);
 
               #pragma clang loop unroll(full)
               for (ushort index = 0; index < 2; ++index) {
-                uint col_idx = \(traversalOffset) + c + morton_offset.x + index;
+                uint col_idx = \(traversalOffset) + tc + morton_offset.x + index;
 
                 bool should_mask = false;
 
@@ -504,7 +506,7 @@ extension AttentionKernel {
     """
               // GLUON-inspired vectorized masking for Metal SIMD (transposed, auto-optimized)
               // For transposed matrix S^T, swap row and col interpretations
-              uint col_idx = \(parallelizationGroupOffset) + morton_offset.y;
+              uint col_idx = \(unsafeParallelizationThreadOffset);
               uint row_base = \(traversalOffset) + c + morton_offset.x;
 
 
@@ -587,7 +589,7 @@ extension AttentionKernel {
     """
               // Traditional element-wise masking (transposed, auto-optimized for large problems)
               // For transposed matrix S^T, swap row and col interpretations
-              uint col_idx = \(parallelizationGroupOffset) + morton_offset.y;
+              uint col_idx = \(unsafeParallelizationThreadOffset);
 
               #pragma clang loop unroll(full)
               for (ushort index = 0; index < 2; ++index) {
