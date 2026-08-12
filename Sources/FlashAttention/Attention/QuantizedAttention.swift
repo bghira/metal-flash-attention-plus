@@ -94,7 +94,27 @@ public class QuantizedAttention {
   private let device: MTLDevice
   private let commandQueue: MTLCommandQueue?
   private var pipelineCache: [String: MTLComputePipelineState] = [:]
+  private var _runtimeQuantizer: GEMMRuntimeQuantization?
+  private var _runtimeQuantizerFailed = false
   private var isDisposed: Bool = false
+
+  /// Cached GPU runtime quantizer (compiles kernels once, reuses).
+  /// Caches init failures to prevent per-call retry.
+  private func getRuntimeQuantizer() -> GEMMRuntimeQuantization? {
+    if let q = _runtimeQuantizer { return q }
+    if _runtimeQuantizerFailed { return nil }
+    do {
+      let q = try GEMMRuntimeQuantization(device: device)
+      _runtimeQuantizer = q
+      return q
+    } catch {
+      _runtimeQuantizerFailed = true
+      if Self.debugEnabled {
+        print("Warning: GPU quantizer init failed (cached, won't retry): \(error)")
+      }
+      return nil
+    }
+  }
 
   /// Set to true via the MFA_DEBUG environment variable to enable verbose
   /// diagnostic prints (quantization parameters, buffer sizes, samples).
@@ -108,6 +128,65 @@ public class QuantizedAttention {
       fatalError("Could not create Metal command queue")
     }
     commandQueue = queue
+  }
+
+  /// Creates a command buffer from the internal command queue, allowing
+  /// callers to batch multiple per-head dispatches into a single commit.
+  public func makeCommandBuffer() -> MTLCommandBuffer? {
+    guard !isDisposed else { return nil }
+    return commandQueue?.makeCommandBuffer()
+  }
+
+  private func pipelineCacheKey(
+    prefix: String,
+    source: String,
+    descriptor: QuantizedAttentionDescriptor,
+    hasBlockwiseQ: Bool,
+    hasBlockwiseK: Bool,
+    hasBlockwiseV: Bool,
+    blockSizeK: UInt32
+  ) -> String {
+    let base = descriptor.baseDescriptor
+    let dims = base.matrixDimensions.map { "\($0.row)x\($0.column)x\($0.head)" } ?? "nil"
+    let sparsity = switch base.sparsityPattern {
+    case .none:
+      "none"
+    case .causal:
+      "causal"
+    case let .slidingWindow(size):
+      "window\(size)"
+    case .custom:
+      "custom"
+    }
+
+    let sparseMask: String
+    if let baseSparseMask = base.sparseMask {
+      let maskType: String
+      switch baseSparseMask.maskType {
+      case .dense:
+        maskType = "dense"
+      case .sparseRanges:
+        maskType = "ranges"
+      case let .blockSparse(blockSize):
+        maskType = "block\(blockSize)"
+      }
+      sparseMask =
+        "\(maskType)_mqa\(baseSparseMask.isMQA ? 1 : 0)_kv\(baseSparseMask.numKVHeads)"
+    } else {
+      sparseMask = "nil"
+    }
+
+    return [
+      prefix,
+      "\(source.hashValue)",
+      dims,
+      sparsity,
+      sparseMask,
+      hasBlockwiseQ ? "bq1" : "bq0",
+      hasBlockwiseK ? "bk1" : "bk0",
+      hasBlockwiseV ? "bv1" : "bv0",
+      "bs\(blockSizeK)",
+    ].joined(separator: "_")
   }
 
   /// Safe disposal method to prevent crashes during Swift ARC cleanup.
@@ -141,16 +220,26 @@ public class QuantizedAttention {
     bufferOffsets: (q: Int, k: Int, v: Int, o: Int, lse: Int) = (0, 0, 0, 0, 0),
     externalLogsumexp: MTLBuffer? = nil,
     mask: MTLBuffer? = nil,
-    maskOffset: Int = 0
+    maskOffset: Int = 0,
+    into externalCommandBuffer: MTLCommandBuffer? = nil
   )
     -> MTLCommandBuffer?
   {
-    guard
-      !isDisposed, let queue = commandQueue,
-      let commandBuffer = queue.makeCommandBuffer()
-    else {
-      print("Error: Failed to create command buffer (disposed: \(isDisposed))")
+    guard !isDisposed else {
+      print("Error: QuantizedAttention is disposed")
       return nil
+    }
+    let commandBuffer: MTLCommandBuffer
+    if let externalCommandBuffer {
+      commandBuffer = externalCommandBuffer
+    } else {
+      guard let queue = commandQueue,
+            let cb = queue.makeCommandBuffer()
+      else {
+        print("Error: Failed to create command buffer")
+        return nil
+      }
+      commandBuffer = cb
     }
 
     let kernelDescriptor = descriptor.kernelDescriptor(type: AttentionKernelType.forward)
@@ -262,7 +351,116 @@ public class QuantizedAttention {
     return commandBuffer
   }
 
-  /// Perform quantized attention forward pass with runtime quantization
+  /// Multi-head quantized attention forward: dispatches ALL heads in a single
+  /// 3D grid `(seq_blocks, numHeads, batchSize)` — matching the BF16
+  /// MultiHeadAttention pattern. Eliminates the per-head encoder loop that
+  /// adds ~24× Metal API overhead.
+  public func forwardMultiHead(
+    query: QuantizedTensor,
+    key: QuantizedTensor,
+    value: QuantizedTensor,
+    output: MTLBuffer,
+    descriptor: QuantizedAttentionDescriptor,
+    batchSize: UInt32,
+    numHeads: UInt32,
+    numKVHeads: UInt32,
+    seqLenQ: UInt32,
+    headDim: UInt16,
+    logsumexp: MTLBuffer,
+    mask: MTLBuffer? = nil,
+    into externalCommandBuffer: MTLCommandBuffer? = nil
+  )
+    -> MTLCommandBuffer?
+  {
+    guard !isDisposed else { return nil }
+    let commandBuffer: MTLCommandBuffer
+    if let externalCommandBuffer {
+      commandBuffer = externalCommandBuffer
+    } else {
+      guard let queue = commandQueue,
+            let cb = queue.makeCommandBuffer()
+      else { return nil }
+      commandBuffer = cb
+    }
+
+    let kernelDescriptor = descriptor.kernelDescriptor(type: .forward)
+    let kernel = AttentionKernel(descriptor: kernelDescriptor)
+
+    guard
+      let pipelineState = getOrCreatePipelineState(
+        for: kernel, descriptor: descriptor, operands: (query, key, value))
+    else { return nil }
+
+    guard let encoder = commandBuffer.makeComputeCommandEncoder() else { return nil }
+    encoder.setComputePipelineState(pipelineState)
+    encoder.setThreadgroupMemoryLength(Int(kernel.threadgroupMemoryAllocation), index: 0)
+
+    // Bind full tensors at offset 0 — the kernel computes per-head offsets
+    // from the 3D grid position (block_id, head_id, batch_id).
+    encoder.setBuffer(query.data, offset: 0, index: 0)
+    encoder.setBuffer(key.data, offset: 0, index: 1)
+    encoder.setBuffer(value.data, offset: 0, index: 2)
+    encoder.setBuffer(output, offset: 0, index: 3)
+    encoder.setBuffer(logsumexp, offset: 0, index: 4)
+
+    // Quant params (same layout as single-head forward).
+    let quantOperands: [QuantizedTensor] = [query, key, value]
+      .filter(\.parameters.precision.requiresQuantizationParameters)
+
+    var bufferIndex = 5
+    for operand in quantOperands {
+      var scale = operand.parameters.scale
+      var zeroPoint = Int32(operand.parameters.zeroPoint)
+      encoder.setBytes(&scale, length: MemoryLayout<Float>.size, index: bufferIndex)
+      bufferIndex += 1
+      encoder.setBytes(&zeroPoint, length: MemoryLayout<Int32>.size, index: bufferIndex)
+      bufferIndex += 1
+    }
+    for operand in quantOperands {
+      encoder.setBuffer(operand.blockScales, offset: 0, index: bufferIndex)
+      bufferIndex += 1
+      encoder.setBuffer(operand.blockZeroPoints, offset: 0, index: bufferIndex)
+      bufferIndex += 1
+    }
+
+    // Strides: nil → kernel uses contiguous BHSD layout.
+    //   strides_Q@bufferIndex, strides_K@+1, strides_V@+2
+    encoder.setBuffer(nil, offset: 0, index: bufferIndex)
+    encoder.setBuffer(nil, offset: 0, index: bufferIndex + 1)
+    encoder.setBuffer(nil, offset: 0, index: bufferIndex + 2)
+
+    // Multi-head params: numHeads, numKVHeads, headDim, seqLen
+    var nh = numHeads
+    var nkh = numKVHeads
+    var hd = UInt32(headDim)
+    var sl = seqLenQ
+    encoder.setBytes(&nh, length: 4, index: bufferIndex + 3)
+    encoder.setBytes(&nkh, length: 4, index: bufferIndex + 4)
+    encoder.setBytes(&hd, length: 4, index: bufferIndex + 5)
+    encoder.setBytes(&sl, length: 4, index: bufferIndex + 6)
+
+    // Mask
+    let maskIndex = bufferIndex + 7
+    if let mask {
+      encoder.setBuffer(mask, offset: 0, index: maskIndex)
+    } else {
+      encoder.setBuffer(nil, offset: 0, index: maskIndex)
+    }
+
+    // 3D grid: (seq_blocks, numHeads, batchSize) — all heads in parallel.
+    let blockParallelization = Int(kernel.blockDimensions.parallelization)
+    let blockCount = (Int(seqLenQ) + blockParallelization - 1) / blockParallelization
+    let gridSize = MTLSize(
+      width: blockCount,
+      height: Int(numHeads),
+      depth: Int(batchSize))
+    let threadgroupSize = MTLSize(width: Int(kernel.threadgroupSize), height: 1, depth: 1)
+
+    encoder.dispatchThreadgroups(gridSize, threadsPerThreadgroup: threadgroupSize)
+    encoder.endEncoding()
+
+    return commandBuffer
+  }
   /// - Parameters:
   ///   - queryBuffer: Query tensor buffer containing fp16/bf16/fp32 data
   ///   - keyBuffer: Key tensor buffer containing fp16/bf16/fp32 data
@@ -440,39 +638,52 @@ public class QuantizedAttention {
       )
     }
 
-    // Use fused quantization for symmetric blockwise quantization
-    if
-      targetStrategy == .symmetric,
-      case let .blockwise(blockSizeK, _) = quantizationMode,
-      targetPrecision == .INT8
-    {
-      do {
-        // Initialize the runtime quantization utility
-        let runtimeQuantizer = try GEMMRuntimeQuantization(device: device)
-
-        // Create command buffer for fused quantization
-        guard
-          let commandQueue = device.makeCommandQueue(),
-          let commandBuffer = commandQueue.makeCommandBuffer()
-        else {
-          fatalError("Could not create Metal command queue or command buffer")
+    // Use fused GPU quantization for symmetric mode.
+    // Blockwise INT8 uses the centered-blockwise kernel; tensor-wise uses
+    // the two-dispatch abs-max + apply kernel (supports INT8 and INT4).
+    if targetStrategy == .symmetric {
+      if let runtimeQuantizer = getRuntimeQuantizer() {
+        if case let .blockwise(blockSizeK, _) = quantizationMode,
+           targetPrecision == .INT8
+        {
+          // Blockwise centered path (INT8 only).
+          let commandBuffer = commandQueue?.makeCommandBuffer()
+          guard let cb = commandBuffer else {
+            fatalError("Could not create Metal command buffer")
+          }
+          do {
+            return try runtimeQuantizer.quantizeBlockwiseCenteredTensor(
+              inputBuffer: buffer,
+              inputPrecision: inputPrecision,
+              elementCount: elementCount,
+              blockSizeK: blockSizeK,
+              commandBuffer: cb
+            )
+          } catch {
+            if Self.debugEnabled {
+              print("Warning: GPU blockwise quant failed, falling back to CPU: \(error)")
+            }
+          }
+        } else {
+          // Tensor-wise GPU path (INT8 and INT4).
+          do {
+            let (tensor, _) = try runtimeQuantizer.quantizeTensorWise(
+              inputBuffer: buffer,
+              inputPrecision: inputPrecision,
+              elementCount: elementCount,
+              targetPrecision: targetPrecision
+            )
+            return tensor
+          } catch {
+            if Self.debugEnabled {
+              print("Warning: GPU tensor-wise quant failed, falling back to CPU: \(error)")
+            }
+          }
         }
-
-        // Use fused blockwise centered quantization
-        let quantizedTensor = try runtimeQuantizer.quantizeBlockwiseCenteredTensor(
-          inputBuffer: buffer,
-          inputPrecision: inputPrecision,
-          elementCount: elementCount,
-          blockSizeK: blockSizeK,
-          commandBuffer: commandBuffer
-        )
-
-        return quantizedTensor
-      } catch {
-        if Self.debugEnabled {
-          print("Warning: Fused quantization failed, falling back to CPU quantization: \(error)")
-        }
-        // Fall through to CPU quantization below
+      }
+      // GPU quantizer init failed — fall through to CPU below.
+      if Self.debugEnabled {
+        print("Warning: GPU quantizer unavailable, falling back to CPU")
       }
     }
 
@@ -617,15 +828,25 @@ public class QuantizedAttention {
     }
     var blockSizeUInt = UInt32(blockSize)
 
-    let cacheKey =
-      "\(source.hashValue)_\(hasBlockwiseQ ? 1 : 0)_\(hasBlockwiseK ? 1 : 0)_\(hasBlockwiseV ? 1 : 0)_\(blockSizeUInt)"
+    let cacheKey = pipelineCacheKey(
+      prefix: "forward",
+      source: source,
+      descriptor: descriptor,
+      hasBlockwiseQ: hasBlockwiseQ,
+      hasBlockwiseK: hasBlockwiseK,
+      hasBlockwiseV: hasBlockwiseV,
+      blockSizeK: blockSizeUInt
+    )
 
     if let cached = pipelineCache[cacheKey] {
       return cached
     }
 
     do {
-      let library = try device.makeLibrary(source: source, options: nil)
+      let compileOpts = MTLCompileOptions()
+      compileOpts.languageVersion = .version3_2
+      let library = try MetalLibraryCompiler.makeLibrary(
+        device: device, source: source, options: compileOpts)
 
       let functionConstants = MTLFunctionConstantValues()
       descriptor.baseDescriptor.setFunctionConstants(functionConstants)
@@ -1021,19 +1242,30 @@ extension QuantizedAttention {
     descriptor: QuantizedAttentionDescriptor,
     bufferOffsets: (q: Int, k: Int, v: Int, o: Int, go: Int, lse: Int, gq: Int, dv: Int) = (0, 0, 0, 0, 0, 0, 0, 0),
     mask: MTLBuffer? = nil,
-    maskOffset: Int = 0
+    maskOffset: Int = 0,
+    into externalCommandBuffer: MTLCommandBuffer? = nil
   )
     -> MTLCommandBuffer?
   {
-    guard
-      !isDisposed, let queue = commandQueue,
-      let commandBuffer = queue.makeCommandBuffer(),
-      let keyBinding = makeBinding(for: key, label: "key"),
-      let valueBinding = makeBinding(for: value, label: "value"),
-      let dims = descriptor.baseDescriptor.matrixDimensions
+    guard !isDisposed,
+          let keyBinding = makeBinding(for: key, label: "key"),
+          let valueBinding = makeBinding(for: value, label: "value"),
+          let dims = descriptor.baseDescriptor.matrixDimensions
     else {
       print("Error: Failed to set up backward query")
       return nil
+    }
+    let commandBuffer: MTLCommandBuffer
+    if let externalCommandBuffer {
+      commandBuffer = externalCommandBuffer
+    } else {
+      guard let queue = commandQueue,
+            let cb = queue.makeCommandBuffer()
+      else {
+        print("Error: Failed to create command buffer")
+        return nil
+      }
+      commandBuffer = cb
     }
 
     // Detect blockwise quantization for function-constant selection.
@@ -1111,19 +1343,30 @@ extension QuantizedAttention {
     descriptor: QuantizedAttentionDescriptor,
     bufferOffsets: (q: Int, k: Int, v: Int, go: Int, lse: Int, dv: Int, gk: Int, gv: Int) = (0, 0, 0, 0, 0, 0, 0, 0),
     mask: MTLBuffer? = nil,
-    maskOffset: Int = 0
+    maskOffset: Int = 0,
+    into externalCommandBuffer: MTLCommandBuffer? = nil
   )
     -> MTLCommandBuffer?
   {
-    guard
-      !isDisposed, let queue = commandQueue,
-      let commandBuffer = queue.makeCommandBuffer(),
-      let keyBinding = makeBinding(for: key, label: "key"),
-      let valueBinding = makeBinding(for: value, label: "value"),
-      let dims = descriptor.baseDescriptor.matrixDimensions
+    guard !isDisposed,
+          let keyBinding = makeBinding(for: key, label: "key"),
+          let valueBinding = makeBinding(for: value, label: "value"),
+          let dims = descriptor.baseDescriptor.matrixDimensions
     else {
       print("Error: Failed to set up backward key-value")
       return nil
+    }
+    let commandBuffer: MTLCommandBuffer
+    if let externalCommandBuffer {
+      commandBuffer = externalCommandBuffer
+    } else {
+      guard let queue = commandQueue,
+            let cb = queue.makeCommandBuffer()
+      else {
+        print("Error: Failed to create command buffer")
+        return nil
+      }
+      commandBuffer = cb
     }
 
     // Detect blockwise quantization for function-constant selection.
@@ -1180,7 +1423,189 @@ extension QuantizedAttention {
     return commandBuffer
   }
 
-  // MARK: - Core backward pipeline helpers
+  /// Multi-head backwardQuery: dispatches ALL heads in one 3D grid.
+  /// Requires a D buffer of size `seqLenQ * numHeads * batchSize * 4` bytes.
+  public func backwardQueryMultiHead(
+    query: QuantizedTensor,
+    key: Any,
+    value: Any,
+    output: MTLBuffer,
+    gradOutput: MTLBuffer,
+    logsumexp: MTLBuffer,
+    gradQuery: MTLBuffer,
+    dValues: MTLBuffer,
+    descriptor: QuantizedAttentionDescriptor,
+    batchSize: UInt32,
+    numHeads: UInt32,
+    numKVHeads: UInt32,
+    seqLenQ: UInt32,
+    headDim: UInt16,
+    mask: MTLBuffer? = nil,
+    into externalCommandBuffer: MTLCommandBuffer? = nil
+  )
+    -> MTLCommandBuffer?
+  {
+    guard !isDisposed,
+          let keyBinding = makeBinding(for: key, label: "key"),
+          let valueBinding = makeBinding(for: value, label: "value"),
+          let dims = descriptor.baseDescriptor.matrixDimensions
+    else { return nil }
+
+    let commandBuffer: MTLCommandBuffer
+    if let externalCommandBuffer {
+      commandBuffer = externalCommandBuffer
+    } else {
+      guard let queue = commandQueue, let cb = queue.makeCommandBuffer() else { return nil }
+      commandBuffer = cb
+    }
+
+    let bwQ = query.blockScales != nil && query.blockSizeK != nil
+    let bwK = keyBinding.blockScales != nil && keyBinding.blockSize != nil
+    let bwV = valueBinding.blockScales != nil && valueBinding.blockSize != nil
+    let bsK = UInt32(query.blockSizeK ?? keyBinding.blockSize ?? valueBinding.blockSize ?? 1)
+
+    guard
+      let core = getOrCreateCorePipeline(
+        type: .backwardQuery, descriptor: descriptor,
+        hasBlockwiseQ: bwQ, hasBlockwiseK: bwK, hasBlockwiseV: bwV, blockSizeK: bsK),
+      let encoder = commandBuffer.makeComputeCommandEncoder()
+    else { return nil }
+
+    encoder.setComputePipelineState(core.pipeline)
+    encoder.setThreadgroupMemoryLength(Int(core.kernel.threadgroupMemoryAllocation), index: 0)
+
+    // Bind full tensors at offset 0.
+    encoder.setBuffer(query.data, offset: 0, index: 0)
+    encoder.setBuffer(keyBinding.buffer, offset: 0, index: 1)
+    encoder.setBuffer(valueBinding.buffer, offset: 0, index: 2)
+    encoder.setBuffer(output, offset: 0, index: 3)
+    encoder.setBuffer(logsumexp, offset: 0, index: 4)
+    encoder.setBuffer(dValues, offset: 0, index: 5)
+    encoder.setBuffer(gradOutput, offset: 0, index: 6)
+    encoder.setBuffer(gradQuery, offset: 0, index: 9)
+
+    bindQuantParams(encoder, query: query, key: keyBinding, value: valueBinding,
+                    config: descriptor.quantizationConfig, startingAt: 10)
+
+    // Set strides (nil) + multi-head params after quant params.
+    let numQuant = [descriptor.quantizationConfig.queryPrecision,
+                    descriptor.quantizationConfig.keyPrecision,
+                    descriptor.quantizationConfig.valuePrecision]
+      .filter(\.requiresQuantizationParameters).count
+    let mhBase = 10 + numQuant * 4
+    let nilBuf: MTLBuffer? = nil
+    encoder.setBuffer(nilBuf, offset: 0, index: mhBase)
+    encoder.setBuffer(nilBuf, offset: 0, index: mhBase + 1)
+    encoder.setBuffer(nilBuf, offset: 0, index: mhBase + 2)
+    var nh = numHeads; var nkh = numKVHeads; var hd = UInt32(headDim); var sl = seqLenQ
+    encoder.setBytes(&nh, length: 4, index: mhBase + 3)
+    encoder.setBytes(&nkh, length: 4, index: mhBase + 4)
+    encoder.setBytes(&hd, length: 4, index: mhBase + 5)
+    encoder.setBytes(&sl, length: 4, index: mhBase + 6)
+    let maskIdx = mhBase + 7
+    if let mask { encoder.setBuffer(mask, offset: 0, index: maskIdx) }
+    else { encoder.setBuffer(nilBuf, offset: 0, index: maskIdx) }
+
+    // 3D grid
+    let bp = Int(core.kernel.blockDimensions.parallelization)
+    let bc = (Int(seqLenQ) + bp - 1) / bp
+    encoder.dispatchThreadgroups(
+      MTLSize(width: bc, height: Int(numHeads), depth: Int(batchSize)),
+      threadsPerThreadgroup: MTLSize(width: Int(core.kernel.threadgroupSize), height: 1, depth: 1))
+    encoder.endEncoding()
+    return commandBuffer
+  }
+
+  /// Multi-head backwardKeyValue: dispatches ALL heads in one 3D grid.
+  public func backwardKeyValueMultiHead(
+    query: QuantizedTensor,
+    key: Any,
+    value: Any,
+    gradOutput: MTLBuffer,
+    logsumexp: MTLBuffer,
+    dValues: MTLBuffer,
+    gradKey: MTLBuffer,
+    gradValue: MTLBuffer,
+    descriptor: QuantizedAttentionDescriptor,
+    batchSize: UInt32,
+    numHeads: UInt32,
+    numKVHeads: UInt32,
+    seqLenKV: UInt32,
+    headDim: UInt16,
+    mask: MTLBuffer? = nil,
+    into externalCommandBuffer: MTLCommandBuffer? = nil
+  )
+    -> MTLCommandBuffer?
+  {
+    guard !isDisposed,
+          let keyBinding = makeBinding(for: key, label: "key"),
+          let valueBinding = makeBinding(for: value, label: "value"),
+          let dims = descriptor.baseDescriptor.matrixDimensions
+    else { return nil }
+
+    let commandBuffer: MTLCommandBuffer
+    if let externalCommandBuffer {
+      commandBuffer = externalCommandBuffer
+    } else {
+      guard let queue = commandQueue, let cb = queue.makeCommandBuffer() else { return nil }
+      commandBuffer = cb
+    }
+
+    let bwQ = query.blockScales != nil && query.blockSizeK != nil
+    let bwK = keyBinding.blockScales != nil && keyBinding.blockSize != nil
+    let bwV = valueBinding.blockScales != nil && valueBinding.blockSize != nil
+    let bsK = UInt32(query.blockSizeK ?? keyBinding.blockSize ?? valueBinding.blockSize ?? 1)
+
+    guard
+      let core = getOrCreateCorePipeline(
+        type: .backwardKeyValue, descriptor: descriptor,
+        hasBlockwiseQ: bwQ, hasBlockwiseK: bwK, hasBlockwiseV: bwV, blockSizeK: bsK),
+      let encoder = commandBuffer.makeComputeCommandEncoder()
+    else { return nil }
+
+    encoder.setComputePipelineState(core.pipeline)
+    encoder.setThreadgroupMemoryLength(Int(core.kernel.threadgroupMemoryAllocation), index: 0)
+
+    // Bind full tensors at offset 0.
+    encoder.setBuffer(query.data, offset: 0, index: 0)
+    encoder.setBuffer(keyBinding.buffer, offset: 0, index: 1)
+    encoder.setBuffer(valueBinding.buffer, offset: 0, index: 2)
+    encoder.setBuffer(logsumexp, offset: 0, index: 4)
+    encoder.setBuffer(dValues, offset: 0, index: 5)
+    encoder.setBuffer(gradOutput, offset: 0, index: 6)
+    encoder.setBuffer(gradValue, offset: 0, index: 7)
+    encoder.setBuffer(gradKey, offset: 0, index: 8)
+
+    bindQuantParams(encoder, query: query, key: keyBinding, value: valueBinding,
+                    config: descriptor.quantizationConfig, startingAt: 9)
+
+    let numQuant = [descriptor.quantizationConfig.queryPrecision,
+                    descriptor.quantizationConfig.keyPrecision,
+                    descriptor.quantizationConfig.valuePrecision]
+      .filter(\.requiresQuantizationParameters).count
+    let mhBase = 9 + numQuant * 4
+    let nilBuf: MTLBuffer? = nil
+    encoder.setBuffer(nilBuf, offset: 0, index: mhBase)
+    encoder.setBuffer(nilBuf, offset: 0, index: mhBase + 1)
+    encoder.setBuffer(nilBuf, offset: 0, index: mhBase + 2)
+    var nh = numHeads; var nkh = numKVHeads; var hd = UInt32(headDim); var sl = seqLenKV
+    encoder.setBytes(&nh, length: 4, index: mhBase + 3)
+    encoder.setBytes(&nkh, length: 4, index: mhBase + 4)
+    encoder.setBytes(&hd, length: 4, index: mhBase + 5)
+    encoder.setBytes(&sl, length: 4, index: mhBase + 6)
+    let maskIdx = mhBase + 7
+    if let mask { encoder.setBuffer(mask, offset: 0, index: maskIdx) }
+    else { encoder.setBuffer(Optional<MTLBuffer>.none, offset: 0, index: maskIdx) }
+
+    // backwardKeyValue parallelizes over the KV (column) dimension.
+    let bp = Int(core.kernel.blockDimensions.parallelization)
+    let bc = (Int(dims.column) + bp - 1) / bp
+    encoder.dispatchThreadgroups(
+      MTLSize(width: bc, height: Int(numHeads), depth: Int(batchSize)),
+      threadsPerThreadgroup: MTLSize(width: Int(core.kernel.threadgroupSize), height: 1, depth: 1))
+    encoder.endEncoding()
+    return commandBuffer
+  }
 
   /// Build the proven core `AttentionKernel` pipeline for the given type.
   /// Supports both per-tensor and blockwise quantization: `HAS_BLOCKWISE_*`
@@ -1197,15 +1622,25 @@ extension QuantizedAttention {
   {
     let kernel = AttentionKernel(descriptor: descriptor.kernelDescriptor(type: type))
     let source = kernel.createSource()
-    let cacheKey =
-      "core_\(type)_\(source.hashValue)_\(hasBlockwiseQ ? 1 : 0)\(hasBlockwiseK ? 1 : 0)\(hasBlockwiseV ? 1 : 0)_\(blockSizeK)"
+    let cacheKey = pipelineCacheKey(
+      prefix: "core_\(type)",
+      source: source,
+      descriptor: descriptor,
+      hasBlockwiseQ: hasBlockwiseQ,
+      hasBlockwiseK: hasBlockwiseK,
+      hasBlockwiseV: hasBlockwiseV,
+      blockSizeK: blockSizeK
+    )
 
     if let cached = pipelineCache[cacheKey] {
       return (cached, kernel)
     }
 
     do {
-      let library = try device.makeLibrary(source: source, options: nil)
+      let coreOpts = MTLCompileOptions()
+      coreOpts.languageVersion = .version3_2
+      let library = try MetalLibraryCompiler.makeLibrary(
+        device: device, source: source, options: coreOpts)
       let functionConstants = MTLFunctionConstantValues()
       descriptor.baseDescriptor.setFunctionConstants(functionConstants)
       var bq = hasBlockwiseQ

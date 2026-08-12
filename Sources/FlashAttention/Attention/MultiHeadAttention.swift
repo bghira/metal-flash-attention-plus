@@ -457,7 +457,8 @@ public class MultiHeadAttention {
       let patchedSource = GEMMBFloatHeaderEmbedder.embed(into: source)
       let opts = MTLCompileOptions()
       opts.languageVersion = .version3_2
-      let library = try device.makeLibrary(source: patchedSource, options: opts)
+      let library = try MetalLibraryCompiler.makeLibrary(
+        device: device, source: patchedSource, options: opts)
 
       let functionConstants = MTLFunctionConstantValues()
       descriptor.baseDescriptor.setFunctionConstants(functionConstants)

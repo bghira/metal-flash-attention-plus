@@ -164,7 +164,8 @@ public final class HadamardRotation {
     let options = MTLCompileOptions()
     options.languageVersion = .version3_2
 
-    let library = try device.makeLibrary(source: source, options: options)
+    let library = try MetalLibraryCompiler.makeLibrary(
+      device: device, source: source, options: options)
     let function = try library.makeFunction(name: "hadamard_rotate")
 
     let pipelineDesc = MTLComputePipelineDescriptor()
