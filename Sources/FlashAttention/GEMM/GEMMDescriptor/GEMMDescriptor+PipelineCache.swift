@@ -98,7 +98,10 @@ public extension GEMMKernel {
 
       let kernel = GEMMKernel(descriptor: kernelDescriptor)
       let source = kernel.createSource()
-      let library = try! device.makeLibrary(source: source, options: nil)
+      let gemmOpts = MTLCompileOptions()
+      gemmOpts.languageVersion = .version3_2
+      let library = try! MetalLibraryCompiler.makeLibrary(
+        device: device, source: source, options: gemmOpts)
 
       let output = (kernel, library)
       cache.storeLibrary(output, for: kernelDescriptor)
