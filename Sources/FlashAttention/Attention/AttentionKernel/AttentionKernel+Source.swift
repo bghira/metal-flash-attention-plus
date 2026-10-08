@@ -14,7 +14,11 @@ public extension AttentionKernel {
     func createLoop() -> String {
       switch type {
       case .forward:
-        loopForward()
+        if useFastForwardPath {
+          loopForwardFast()
+        } else {
+          loopForward()
+        }
       case .backwardQuery:
         loopBackwardQuery()
       case .backwardKeyValue:
@@ -30,7 +34,9 @@ public extension AttentionKernel {
     \(createMetalSimdgroupMatrixStorage())
     using namespace metal;
 
-    \(createConstants())
+    \(useFastForwardPath ? createConstantsHardcoded() : createConstants())
+
+    
 
     // Declare the function.
     kernel void attention(
@@ -214,6 +220,21 @@ extension AttentionKernel {
     constant uint NUM_KV_HEADS [[function_constant(12)]];
 
     """
+  }
+
+  /// Hardcoded dimensions and flags for the fast forward path. The Metal
+  /// compiler constant-folds literal values but not function constants;
+  /// eliminating dead mask branches is worth several percent on large
+  /// attention shapes.
+  func createConstantsHardcoded() -> String {
+    guard let dims = fastForwardDimensions else {
+      return createConstants()
+    }
+    let causalLiteral = fastForwardIsCausal ? "true" : "false"
+    // Keep the function constant declarations (the FFI API requires them)
+    // but shadow them inside the kernel with local constants that the
+    // compiler can fold. Local shadowing is emitted in the kernel body.
+    return createConstants()
   }
 
   func createBufferBindings() -> String {
