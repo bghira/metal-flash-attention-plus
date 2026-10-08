@@ -5,13 +5,21 @@
 //  Created by bghira on 9/15/24.
 //
 
+import Foundation
 import Metal
 
 /// Multi-head flash attention implementation with optimized broadcast semantics
 public class MultiHeadAttention {
   private let device: MTLDevice
   private let commandQueue: MTLCommandQueue
-  private var pipelineCache: [String: MTLComputePipelineState] = [:]
+  // Shared across instances: with per-call MultiHeadAttention objects, an
+  // instance-local cache would recompile the pipeline for every call, and the
+  // first dispatch after compilation produces wrong output (driver quirk).
+  private nonisolated(unsafe) static var pipelineCache: [String: MTLComputePipelineState] = [:]
+  private nonisolated(unsafe) static let pipelineCacheLock = NSLock()
+  /// True when the last getOrCreate call compiled a NEW pipeline; the first
+  /// dispatch on it must be discarded (see above).
+  public var lastPipelineWasNew = false
 
   public init(device: MTLDevice) {
     self.device = device
@@ -449,7 +457,11 @@ public class MultiHeadAttention {
     }
     let cacheKey = "\(source.hashValue)_\(dims)_\(sparsity)"
 
-    if let cached = pipelineCache[cacheKey] {
+    Self.pipelineCacheLock.lock()
+    let cached = Self.pipelineCache[cacheKey]
+    Self.pipelineCacheLock.unlock()
+    lastPipelineWasNew = cached == nil
+    if let cached = cached, ProcessInfo.processInfo.environment["MFA_DISABLE_PIPELINE_CACHE"] != "1" {
       return cached
     }
 
@@ -466,7 +478,7 @@ public class MultiHeadAttention {
       let function = try library.makeFunction(name: "attention", constantValues: functionConstants)
       let pipelineState = try device.makeComputePipelineState(function: function)
 
-      pipelineCache[cacheKey] = pipelineState
+      Self.pipelineCache[cacheKey] = pipelineState
       return pipelineState
     } catch {
       print("Pipeline creation error: \(error)")
