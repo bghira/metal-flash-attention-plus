@@ -6,6 +6,233 @@
 //
 
 import Foundation
+import Metal
+
+/// Detects whether inline `__asm` kernels can be compiled in this process.
+/// macOS 26 (Tahoe) rejects them with "illegal string literal in 'asm'",
+/// which makes every kernel that embeds the simdgroup event header
+/// uncompileable unless the offline `x metal` toolchain is available
+/// (Xcode, or Metal Developer Tools via MFA_METAL_TOOLCHAIN). When asm is
+/// unsupported, the headers below emit a synchronous fallback implementation
+/// with identical semantics instead. Cached in MetalLibraryCompiler.
+private func inlineAsmSupported() -> Bool {
+  guard let device = MTLCreateSystemDefaultDevice() else { return false }
+  return MetalLibraryCompiler.inlineAsmSupported(device: device)
+}
+
+/// Synchronous replacement for the AIR simdgroup async-copy header.
+///
+/// In MFA-generated kernels only lane 0 of each simdgroup issues `async_copy`
+/// and immediately waits on the event, so a copy executed by the calling
+/// thread preserves semantics exactly — it merely forfeits the hardware
+/// latency hiding of the asynchronous copy.
+func createMetalSimdgroupEventFallback() -> String {
+  """
+  // -*- Metal -*-
+  //===-- metal_simdgroup_event (synchronous fallback) ----------------------===//
+  // For runtimes that reject inline __asm (e.g. macOS 26 JIT).
+  //===----------------------------------------------------------------------===//
+
+  #ifndef __METAL_SIMDGROUP_EVENT
+  #define __METAL_SIMDGROUP_EVENT
+
+  struct _simdgroup_event_t {
+    uint dummy;
+  };
+
+  // threadgroup <- device, 1D
+  thread _simdgroup_event_t*
+  __metal_simdgroup_async_copy_1d(
+    ulong element_size, ulong element_align,
+    threadgroup void *dst, const device void *src, ulong count)
+  {
+    threadgroup uchar *dst_bytes = reinterpret_cast<threadgroup uchar *>(dst);
+    const device uchar *src_bytes = reinterpret_cast<const device uchar *>(src);
+    ulong total = count * element_size;
+    for (ulong i = 0; i < total; ++i) {
+      dst_bytes[i] = src_bytes[i];
+    }
+    return nullptr;
+  }
+
+  // device <- threadgroup, 1D
+  thread _simdgroup_event_t*
+  __metal_simdgroup_async_copy_1d(
+    ulong element_size, ulong element_align,
+    device void *dst, const threadgroup void *src, ulong count)
+  {
+    device uchar *dst_bytes = reinterpret_cast<device uchar *>(dst);
+    const threadgroup uchar *src_bytes = reinterpret_cast<const threadgroup uchar *>(src);
+    ulong total = count * element_size;
+    for (ulong i = 0; i < total; ++i) {
+      dst_bytes[i] = src_bytes[i];
+    }
+    return nullptr;
+  }
+
+  // threadgroup <- device, 2D tile
+  thread _simdgroup_event_t*
+  __metal_simdgroup_async_copy_2d(
+    ulong element_size, ulong element_align,
+    threadgroup void *dst, ulong dst_leading, ulong dst_groups, ulong2 dst_dims,
+    const device void *src, ulong src_leading, ulong src_groups, ulong2 src_dims,
+    long2 origin, int clamp_mode)
+  {
+    threadgroup uchar *dst_bytes = reinterpret_cast<threadgroup uchar *>(dst);
+    const device uchar *src_bytes = reinterpret_cast<const device uchar *>(src);
+    for (ulong row = 0; row < dst_dims.y; ++row) {
+      for (ulong col = 0; col < dst_dims.x; ++col) {
+        ulong dst_index = (row * dst_leading + col) * element_size;
+        ulong src_index = (row * src_leading + col) * element_size;
+        for (ulong b = 0; b < element_size; ++b) {
+          dst_bytes[dst_index + b] = src_bytes[src_index + b];
+        }
+      }
+    }
+    return nullptr;
+  }
+
+  // device <- threadgroup, 2D tile
+  thread _simdgroup_event_t*
+  __metal_simdgroup_async_copy_2d(
+    ulong element_size, ulong element_align,
+    device void *dst, ulong dst_leading, ulong dst_groups, ulong2 dst_dims,
+    const threadgroup void *src, ulong src_leading, ulong src_groups, ulong2 src_dims,
+    long2 origin, int clamp_mode)
+  {
+    device uchar *dst_bytes = reinterpret_cast<device uchar *>(dst);
+    const threadgroup uchar *src_bytes = reinterpret_cast<const threadgroup uchar *>(src);
+    for (ulong row = 0; row < dst_dims.y; ++row) {
+      for (ulong col = 0; col < dst_dims.x; ++col) {
+        ulong dst_index = (row * dst_leading + col) * element_size;
+        ulong src_index = (row * src_leading + col) * element_size;
+        for (ulong b = 0; b < element_size; ++b) {
+          dst_bytes[dst_index + b] = src_bytes[src_index + b];
+        }
+      }
+    }
+    return nullptr;
+  }
+
+  void __metal_wait_simdgroup_events(
+    int count, thread _simdgroup_event_t **events)
+  {
+    // No-op: fallback copies complete synchronously before returning.
+  }
+
+  #pragma METAL internals : enable
+  namespace metal
+  {
+    enum class simdgroup_async_copy_clamp_mode {
+      clamp_to_zero = 0,
+      clamp_to_edge = 1
+    };
+
+    struct simdgroup_event {
+      METAL_FUNC simdgroup_event() thread {}
+
+      template <typename T>
+      METAL_FUNC void async_copy(
+        threadgroup T *dst,
+        const device T *src,
+        ulong n_elements
+      ) thread {
+        event = __metal_simdgroup_async_copy_1d(
+          sizeof(T),
+          alignof(T),
+          reinterpret_cast<threadgroup void *>(dst),
+          reinterpret_cast<const device void *>(src),
+          n_elements);
+      }
+
+      template <typename T>
+      METAL_FUNC void async_copy(
+        device T *dst,
+        const threadgroup T *src,
+        ulong n_elements
+      ) thread {
+        event = __metal_simdgroup_async_copy_1d(
+          sizeof(T),
+          alignof(T),
+          reinterpret_cast<device void *>(dst),
+          reinterpret_cast<const threadgroup void *>(src),
+          n_elements);
+      }
+
+      template <typename T>
+      METAL_FUNC void async_copy(
+        threadgroup T *dst,
+        ushort dst_elements_per_row,
+        ushort2 dst_tile_dimensions,
+        const device T *src,
+        uint src_elements_per_row,
+        ushort2 src_tile_dimensions,
+        bool transpose_matrix = false,
+        simdgroup_async_copy_clamp_mode clamp_mode =
+          simdgroup_async_copy_clamp_mode::clamp_to_zero
+      ) thread {
+        if (transpose_matrix) {
+          src_tile_dimensions = src_tile_dimensions.yx;
+          dst_tile_dimensions = dst_tile_dimensions.yx;
+        }
+        event = __metal_simdgroup_async_copy_2d(
+          sizeof(T),
+          alignof(T),
+          reinterpret_cast<threadgroup void *>(dst),
+          ushort(dst_elements_per_row),
+          1,
+          ulong2(dst_tile_dimensions),
+          reinterpret_cast<const device void *>(src),
+          uint(src_elements_per_row),
+          1,
+          ulong2(src_tile_dimensions),
+          long2(0),
+          static_cast<int>(clamp_mode));
+      }
+
+      template <typename T>
+      METAL_FUNC void async_copy(
+        device T *dst,
+        uint dst_elements_per_row,
+        ushort2 dst_tile_dimensions,
+        const threadgroup T *src,
+        ushort src_elements_per_row,
+        ushort2 src_tile_dimensions,
+        bool transpose_matrix = false
+      ) thread {
+        if (transpose_matrix) {
+          src_tile_dimensions = src_tile_dimensions.yx;
+          dst_tile_dimensions = dst_tile_dimensions.yx;
+        }
+        event = __metal_simdgroup_async_copy_2d(
+          sizeof(T),
+          alignof(T),
+          reinterpret_cast<device void *>(dst),
+          uint(dst_elements_per_row),
+          1,
+          ulong2(dst_tile_dimensions),
+          reinterpret_cast<const threadgroup void *>(src),
+          ushort(src_elements_per_row),
+          1,
+          ulong2(src_tile_dimensions),
+          long2(0),
+          0);
+      }
+
+      METAL_FUNC static void wait(int count, thread simdgroup_event *events) {
+        __metal_wait_simdgroup_events(
+          count, reinterpret_cast<thread _simdgroup_event_t**>(events));
+      }
+
+    private:
+      thread _simdgroup_event_t* event;
+    };
+  } // namespace metal
+  #pragma METAL internals : disable
+
+  #endif // __METAL_SIMDGROUP_EVENT
+  """
+}
 
 enum GEMMBFloatHeaderEmbedder {
   private static let headerSource: String = {
@@ -46,8 +273,22 @@ enum GEMMBFloatHeaderEmbedder {
 /// - The results of the async copy will be read from. This means at least one
 ///   thread must dereference a pointer within the region of threadgroup memory.
 func createMetalSimdgroupEvent() -> String {
+  let original = createMetalSimdgroupEventOriginal()
+  if !inlineAsmSupported() {
+    // The macOS 26+ JIT rejects `__asm("air.…")` labels outright (frontend
+    // blocklist on the "air." prefix), while the backend still lowers these
+    // ops. Prefixing the label with byte 0x01 — LLVM's standard "do not
+    // mangle" escape, spelled `\001` in a Metal string literal — bypasses the
+    // frontend check and produces the identical intrinsic call.
+    return original.replacingOccurrences(
+      of: "__asm(\"air.", with: "__asm(\"\\u{01}air.")
+  }
+  return original
+}
+
+func createMetalSimdgroupEventOriginal() -> String {
   // Return the source string.
-  """
+  return """
   // -*- Metal -*-
   //===-- metal_simdgroup_event ---------------------------------------------===//
   // Copyright (c) 2024 Philip Turner. See MIT LICENSE

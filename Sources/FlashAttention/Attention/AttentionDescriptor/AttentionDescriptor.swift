@@ -5,6 +5,7 @@
 //  Created by Philip Turner on 8/8/24.
 //
 
+import Foundation
 import Metal
 
 public enum SparsityPattern {
@@ -185,6 +186,72 @@ public extension AttentionDescriptor {
     output.type = type
     output.softmaxScale = softmaxScale
     output.sparseMask = sparseMask
+
+    // Fast forward path: register-resident Q, double-buffered threadgroup
+    // K/V with batched staging. Conditions:
+    //   - forward kernel
+    //   - dense or causal sparsity (handled by the existing mask generators)
+    //   - no quantization
+    //   - head dimension multiple of 8, up to 128
+    //   - K/V memory precisions equal, non-quantized
+    //   - double-buffered K/V tiles fit in threadgroup memory
+    //   - sequence length large enough to benefit (>= 2 tiles of 64 rows)
+    let sparseOK = { () -> Bool in
+        guard let sparseMask else { return true }
+        if case .dense = sparseMask.maskType { return true }
+        return false
+      }()
+      if type == .forward, let matrixDimensions, sparseOK {
+      let device = MTLContext.global.device
+      let head = Int(matrixDimensions.head)
+      let seq = Int(max(matrixDimensions.row, matrixDimensions.column))
+      let supportedPrecisions: Set<GEMMOperandPrecision> = [.FP32, .FP16, .BF16]
+      let qOK = supportedPrecisions.contains(memoryPrecisions[.Q] ?? .INT8)
+      let kPrec = memoryPrecisions[.K]
+      let vPrec = memoryPrecisions[.V]
+      let oOK = supportedPrecisions.contains(memoryPrecisions[.O] ?? .INT8)
+      let quantizedOK = qOK && oOK && kPrec != nil && vPrec != nil
+        && supportedPrecisions.contains(kPrec!) && kPrec == vPrec
+      if quantizedOK, head % 8 == 0, head <= 128, seq >= 96 {
+        let elemSize = kPrec!.size
+        let maxTG = min(Int(device.maxThreadgroupMemoryLength), 49152)
+        var fastTraversal: UInt16 = 0
+        for candidate in [UInt16(64), 32, 16] {
+          let bytes = 2 * Int(candidate) * head * elemSize * 2
+          if bytes + 1024 <= maxTG {
+            fastTraversal = candidate
+            break
+          }
+        }
+        if fastTraversal > 0 {
+          output.preferFastForward = true
+          // Hardcode R/C for constant folding. Only for square attention
+          // (row == column); cross-attention keeps function constants.
+          if matrixDimensions.row == matrixDimensions.column {
+            output.fastForwardDimensions = (
+              rows: matrixDimensions.row,
+              columns: matrixDimensions.column
+            )
+          }
+          output.fastForwardIsCausal = { if case .causal = sparsityPattern { return true }; return false }()
+          output.blockDimensions = (
+            parallelization: UInt16(64),
+            traversal: fastTraversal,
+            head: output.blockDimensions!.head
+          )
+          output.cacheState[.Q] = false
+          output.cacheState[.O] = false
+        }
+      }
+    }
+
+    // Block dimension override for tuning
+    if let env = getenv("MFA_BLOCK_DIMS") {
+      let parts = String(cString: env).split(separator: ",").compactMap { UInt16($0) }
+      if parts.count == 3 {
+        output.blockDimensions = (parallelization: parts[0], traversal: parts[1], head: parts[2])
+      }
+    }
 
     return output
   }

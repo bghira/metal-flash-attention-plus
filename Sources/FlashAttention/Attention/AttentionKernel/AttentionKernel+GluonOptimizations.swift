@@ -312,11 +312,8 @@ extension AttentionKernel {
 
   /// Determines if GLUON optimizations should be enabled based on problem size
   func shouldEnableGluonOptimizations() -> Bool {
-    let sequenceLength = blockDimensions.traversal
-    let headDimension = blockDimensions.head
-
     // Enable GLUON optimizations for larger problems where overhead is justified
-    return sequenceLength >= 512 && headDimension >= 64
+    return false // Unfinished skeleton: placeholder pipeline stages, undeclared buffers, invalid event API
   }
 
   /// Enhanced softmax with optional GLUON optimizations

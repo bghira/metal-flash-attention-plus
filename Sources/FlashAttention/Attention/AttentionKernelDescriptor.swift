@@ -27,6 +27,19 @@ public struct AttentionKernelDescriptor {
   /// strategies for the same shape. `nil` (default) = consult the heuristic.
   public var maskingStrategyOverride: MaskingStrategy?
 
+  /// Opt into the fast forward path: register-resident Q, double-buffered
+  /// threadgroup K/V with batched staging. Gated by the descriptor logic;
+  /// defaults to false.
+  public var preferFastForward: Bool = false
+
+  /// Sparsity pattern, used by the fast forward path to hardcode IS_CAUSAL.
+  public var fastForwardIsCausal: Bool = false
+
+  /// Matrix dimensions for the fast forward path. When set, the kernel
+  /// source hardcodes R/C instead of using function constants, enabling
+  /// Metal compiler constant folding (worth ~8% on large shapes).
+  public var fastForwardDimensions: (rows: UInt32, columns: UInt32)?
+
   public var memoryPrecisions: [AttentionOperand: GEMMOperandPrecision] = [:]
 
   /// Scale factor for attention computation (typically 1/√head_dim).
