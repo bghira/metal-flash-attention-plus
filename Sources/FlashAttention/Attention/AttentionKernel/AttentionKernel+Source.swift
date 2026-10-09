@@ -36,7 +36,7 @@ public extension AttentionKernel {
 
     \(useFastForwardPath ? createConstantsHardcoded() : createConstants())
 
-    
+
 
     // Declare the function.
     kernel void attention(
