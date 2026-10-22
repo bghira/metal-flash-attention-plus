@@ -402,11 +402,7 @@ extension AttentionKernel {
   private func createThreadgroupMemoryAllocation() -> UInt16 {
     // Fast forward path: K/V double buffers only (Q and O stay in registers).
     if preferFastForward {
-      let elemSize = Int(memoryPrecisions[.K]!.size)
-      let head = Int(paddedHeadDimension)
-      let traversal = Int(blockDimensions.traversal)
-      let bytes = 2 * traversal * head * elemSize * 2
-      return UInt16(min(bytes, Int(UInt16.max)))
+      return UInt16(min(fastForwardThreadgroupBytes, Int(UInt16.max)))
     }
 
     var output: UInt16 = .zero
