@@ -217,9 +217,13 @@ extension AttentionKernel {
         uint4 ff_vbuf[\(chunksPerThread)];
 
         // Vectorized staging requires 16-byte-aligned rows (stride multiple
-        // of 8 elements). Contiguous tensors satisfy this; odd-strided
-        // views fall back to scalar staging.
-        bool ff_vec = ((K_ld % 8 == 0) && (V_ld % 8 == 0));
+        // of 8 elements) *and* 16-byte-aligned base pointers (a strided
+        // view's storage offset can leave the base 2-byte aligned).
+        // Anything else falls back to scalar staging.
+        bool ff_vec =
+          ((K_ld % 8 == 0) && (V_ld % 8 == 0) &&
+           ((reinterpret_cast<ulong>(K) & 15) == 0) &&
+           ((reinterpret_cast<ulong>(V) & 15) == 0));
 
         // Prologue: stage tile 0 into buffer 0.
         {
