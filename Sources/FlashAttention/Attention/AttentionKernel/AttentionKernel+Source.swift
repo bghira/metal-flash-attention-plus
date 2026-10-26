@@ -457,8 +457,17 @@ extension AttentionKernel {
 
     return """
 
+    \(blockDimensions.parallelization >= blockDimensions.traversal ? """
+    // Causal: keys beyond this query block's diagonal contribute nothing,
+    // so stop the traversal at the diagonal tile.
+    uint bw_c_end = C;
+    if (IS_CAUSAL) {
+      bw_c_end = min(C, parallelization_group_offset + \(blockDimensions.parallelization));
+    }
+    """ : "const uint bw_c_end = C;")
+
     // Outer loop over the traversal dimension.
-    for (uint c = 0; c < C; c += \(blockDimensions.traversal)) {
+    for (uint c = 0; c < bw_c_end; c += \(blockDimensions.traversal)) {
       // S = Q * K^T
       \(QKT)
       \(maskSparsityPattern())
@@ -506,8 +515,16 @@ extension AttentionKernel {
 
     return """
 
+    // Causal: query rows before this key block contribute nothing, so start
+    // at the tile containing the block's first key.
+    uint bw_r_start = 0;
+    if (IS_CAUSAL) {
+      bw_r_start = (parallelization_group_offset / \(blockDimensions.traversal))
+        * \(blockDimensions.traversal);
+    }
+
     // Outer loop over the traversal dimension.
-    for (uint r = 0; r < R; r += \(blockDimensions.traversal)) {
+    for (uint r = bw_r_start; r < R; r += \(blockDimensions.traversal)) {
       // S^T = K * Q^T
       \(KQT)
       \(maskSparsityPatternTransposed())

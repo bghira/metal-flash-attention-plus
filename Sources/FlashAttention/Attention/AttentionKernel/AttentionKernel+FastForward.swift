@@ -11,17 +11,23 @@
 //     While iteration t computes, the tile for iteration t+1 is fetched
 //     into registers with batched 16-byte vector loads, hiding global
 //     memory latency behind tensor-core work.
-//  3. Staging uses two phases (read all global data into registers, then
+//  3. K lands transposed ([head x seq]) in threadgroup memory, so the
+//     B-operand fragment load is one packed vector load instead of two
+//     scalar loads 'head' elements apart. The row stride carries a
+//     two-element pad to keep the staging scatter out of a single
+//     threadgroup bank group; V stays row-major.
+//  4. Staging uses two phases (read all global data into registers, then
 //     write all data to threadgroup memory), avoiding serialized
 //     load-use stalls.
-//  4. One threadgroup barrier per traversal iteration.
+//  5. One threadgroup barrier per traversal iteration.
+//  6. Causal attention stops at the diagonal tile instead of traversing
+//     the fully masked remainder of the sequence.
 //
 //  Gated to non-quantized forward kernels whose head dimension is a
 //  multiple of 8 (up to 128) and whose double-buffered K/V tiles fit in
-//  threadgroup memory. Causal and sliding-window masking are handled by
-//  the existing mask generators (without tile skipping). Strided views
-//  whose row stride is not a multiple of 8 elements fall back to scalar
-//  staging at runtime.
+//  threadgroup memory. Masking is handled by the existing mask
+//  generators. Strided views whose row stride is not a multiple of 8
+//  elements fall back to scalar staging at runtime.
 //
 //  Note: the vectorized staging path assumes 16-byte-aligned K/V buffer
 //  bases, which holds for all realistic allocations (Metal guarantees
@@ -38,17 +44,37 @@ extension AttentionKernel {
     32 * Int(blockDimensions.parallelization / 8)
   }
 
+  // K is staged transposed ([head][seq]) so the B-operand fragment load
+  // reads two adjacent sequence elements with one vector load instead of
+  // two scalar loads `head` elements apart. The two-element padding keeps
+  // the transposed staging stores out of the same threadgroup bank (an
+  // unpadded row stride is a multiple of the 128-byte bank period, which
+  // serializes the scatter eight ways).
+  var fastForwardKStride: Int {
+    Int(blockDimensions.traversal) + 2
+  }
+
+  // Double-buffered K ([head][stride]) plus double-buffered V ([seq][head]).
+  var fastForwardThreadgroupBytes: Int {
+    let head = Int(paddedHeadDimension)
+    let traversal = Int(blockDimensions.traversal)
+    let elemSize = Int(memoryPrecisions[.K]!.size)
+    return 2 * (head * fastForwardKStride + traversal * head) * elemSize
+  }
+
   func loopForwardFast() -> String {
     let traversal = Int(blockDimensions.traversal)
     let head = Int(paddedHeadDimension)
+    let strideK = fastForwardKStride
     let threads = fastForwardThreads
     let elemSize = Int(memoryPrecisions[.K]!.size)
     let elemsPerChunk = 16 / elemSize
     let chunksPerRow = head / elemsPerChunk
     let chunksPerTile = traversal * chunksPerRow
     let chunksPerThread = (chunksPerTile + threads - 1) / threads
-    let tileElems = traversal * head
-    let kBytes = 2 * tileElems * elemSize
+    let kTileElems = head * strideK
+    let vTileElems = traversal * head
+    let kBytes = 2 * kTileElems * elemSize
     let memK = memoryName(.K)
     let memV = memoryName(.V)
     let memQ = memoryName(.Q)
@@ -62,8 +88,9 @@ extension AttentionKernel {
 
     // Fetch one K/V tile from global memory into registers. All threads
     // participate; 16-byte vector loads are issued back-to-back.
-    // K is read in row-major [seq × head] and will be written transposed
-    // to threadgroup as [head × seq], enabling vector fragment loads.
+    // K is read in row-major [seq × head]; the staging write scatters it
+    // into the transposed threadgroup tile [head × seq]. V is read the same
+    // way and written row-major [seq × head].
     func stageRead(cExpr: String) -> String {
       return """
           #pragma clang loop unroll(full)
@@ -90,7 +117,10 @@ extension AttentionKernel {
       """
     }
 
-    // Drain the register buffers into a pair of threadgroup tile buffers.
+    // Drain the register buffers. K goes to the transposed [head × seq]
+    // tile (scalar scatter; the padded stride keeps consecutive head
+    // indices in distinct banks). V goes to the row-major [seq × head]
+    // tile with one 16-byte store.
     func stageWrite(kBufExpr: String, vBufExpr: String) -> String {
       return """
           #pragma clang loop unroll(full)
@@ -99,9 +129,12 @@ extension AttentionKernel {
             if (ff_e < \(chunksPerTile)) {
               uint ff_row = ff_e / \(chunksPerRow);
               uint ff_col = (ff_e % \(chunksPerRow)) * \(elemsPerChunk);
-              *(threadgroup uint4*)(
-                reinterpret_cast<threadgroup uint4*>(\(kBufExpr) + ff_row * \(head) + ff_col)
-              ) = ff_kbuf[i];
+              uint4 ff_tmp = ff_kbuf[i];
+              thread \(memK)* ff_vals = (thread \(memK)*)(&ff_tmp);
+              #pragma clang loop unroll(full)
+              for (uint ff_j = 0; ff_j < \(elemsPerChunk); ff_j++) {
+                \(kBufExpr)[(ff_col + ff_j) * \(strideK) + ff_row] = ff_vals[ff_j];
+              }
               *(threadgroup uint4*)(
                 reinterpret_cast<threadgroup uint4*>(\(vBufExpr) + ff_row * \(head) + ff_col)
               ) = ff_vbuf[i];
@@ -110,7 +143,8 @@ extension AttentionKernel {
       """
     }
 
-    // Alignment-agnostic fallback: copy global -> threadgroup element-wise.
+    // Alignment-agnostic fallback: copy global -> threadgroup element-wise,
+    // scattering K into the transposed tile.
     func stageDirect(cExpr: String, kBufExpr: String, vBufExpr: String) -> String {
       return """
           #pragma clang loop unroll(full)
@@ -120,14 +154,14 @@ extension AttentionKernel {
             uint ff_src_row = uint(\(cExpr)) + ff_row;
             if (ff_src_row < C) {
               for (uint ff_j = 0; ff_j < \(elemsPerChunk); ff_j++) {
-                \(kBufExpr)[ff_row * \(head) + ff_col + ff_j] =
+                \(kBufExpr)[(ff_col + ff_j) * \(strideK) + ff_row] =
                   K[ff_src_row * K_ld + ff_col + ff_j];
                 \(vBufExpr)[ff_row * \(head) + ff_col + ff_j] =
                   V[ff_src_row * V_ld + ff_col + ff_j];
               }
             } else {
               for (uint ff_j = 0; ff_j < \(elemsPerChunk); ff_j++) {
-                \(kBufExpr)[ff_row * \(head) + ff_col + ff_j] = \(memK)(0);
+                \(kBufExpr)[(ff_col + ff_j) * \(strideK) + ff_row] = \(memK)(0);
                 \(vBufExpr)[ff_row * \(head) + ff_col + ff_j] = \(memV)(0);
               }
             }
@@ -183,9 +217,13 @@ extension AttentionKernel {
         uint4 ff_vbuf[\(chunksPerThread)];
 
         // Vectorized staging requires 16-byte-aligned rows (stride multiple
-        // of 8 elements). Contiguous tensors satisfy this; odd-strided
-        // views fall back to scalar staging.
-        bool ff_vec = ((K_ld % 8 == 0) && (V_ld % 8 == 0));
+        // of 8 elements) *and* 16-byte-aligned base pointers (a strided
+        // view's storage offset can leave the base 2-byte aligned).
+        // Anything else falls back to scalar staging.
+        bool ff_vec =
+          ((K_ld % 8 == 0) && (V_ld % 8 == 0) &&
+           ((reinterpret_cast<ulong>(K) & 15) == 0) &&
+           ((reinterpret_cast<ulong>(V) & 15) == 0));
 
         // Prologue: stage tile 0 into buffer 0.
         {
@@ -210,20 +248,27 @@ extension AttentionKernel {
           *(O_sram[d / 8].thread_elements()) = vec<\(regO), 2>(0);
         }
 
-        // Outer loop over the traversal dimension.
-        for (uint c = 0; c < C; c += \(traversal)) {
+        // Outer loop over the traversal dimension. For causal attention,
+        // tiles whose columns lie entirely beyond this Q block's rows are
+        // fully masked, so stop at the diagonal instead of traversing all
+        // of C.
+        uint ff_c_end = C;
+        if (IS_CAUSAL) {
+          ff_c_end = min(C, parallelization_group_offset + \(blockDimensions.parallelization));
+        }
+        for (uint c = 0; c < ff_c_end; c += \(traversal)) {
           uint ff_tile = c / \(traversal);
-          threadgroup \(memK)* ff_kcur = ff_kbuffers + (ff_tile & 1) * \(tileElems);
-          threadgroup \(memV)* ff_vcur = ff_vbuffers + (ff_tile & 1) * \(tileElems);
+          threadgroup \(memK)* ff_kcur = ff_kbuffers + (ff_tile & 1) * \(kTileElems);
+          threadgroup \(memV)* ff_vcur = ff_vbuffers + (ff_tile & 1) * \(vTileElems);
 
-          bool ff_more = (c + \(traversal) < C);
+          bool ff_more = (c + \(traversal) < ff_c_end);
           if (ff_more) {
             // Fetch the next tile while this tile computes.
             if (ff_vec) {
               \(stageRead(cExpr: "(c + \(traversal))"))
             } else {
-              threadgroup \(memK)* ff_knext0 = ff_kbuffers + ((ff_tile + 1) & 1) * \(tileElems);
-              threadgroup \(memV)* ff_vnext0 = ff_vbuffers + ((ff_tile + 1) & 1) * \(tileElems);
+              threadgroup \(memK)* ff_knext0 = ff_kbuffers + ((ff_tile + 1) & 1) * \(kTileElems);
+              threadgroup \(memV)* ff_vnext0 = ff_vbuffers + ((ff_tile + 1) & 1) * \(vTileElems);
               \(stageDirect(
                 cExpr: "(c + \(traversal))",
                 kBufExpr: "ff_knext0",
@@ -241,10 +286,12 @@ extension AttentionKernel {
           for (ushort d = 0; d < \(head); d += 8) {
             #pragma clang loop unroll(full)
             for (ushort cc = 0; cc < \(traversal); cc += 8) {
-              auto K_src = ff_kcur + morton_offset.x * \(head) + morton_offset.y;
-              ushort2 K_origin(cc, d);
+              // Transposed tile: row = head index, column = seq index.
+              auto K_src = ff_kcur + (morton_offset.y + d) * \(strideK)
+                + (morton_offset.x + cc);
+              ushort2 K_origin(0, 0);
               simdgroup_matrix_storage<\(regK)> K;
-              K.load(K_src, \(head), K_origin, true);
+              K.load(K_src, \(strideK), K_origin, false);
               S_sram[cc / 8].multiply(Q_sram[d / 8], K, true);
             }
           }
@@ -286,8 +333,8 @@ extension AttentionKernel {
 
           if (ff_more && ff_vec) {
             // Publish the prefetched tile into the other threadgroup buffer.
-            threadgroup \(memK)* ff_knext = ff_kbuffers + ((ff_tile + 1) & 1) * \(tileElems);
-            threadgroup \(memV)* ff_vnext = ff_vbuffers + ((ff_tile + 1) & 1) * \(tileElems);
+            threadgroup \(memK)* ff_knext = ff_kbuffers + ((ff_tile + 1) & 1) * \(kTileElems);
+            threadgroup \(memV)* ff_vnext = ff_vbuffers + ((ff_tile + 1) & 1) * \(vTileElems);
             \(stageWrite(
               kBufExpr: "ff_knext",
               vBufExpr: "ff_vnext"))

@@ -217,7 +217,10 @@ public extension AttentionDescriptor {
         let maxTG = min(Int(device.maxThreadgroupMemoryLength), 49152)
         var fastTraversal: UInt16 = 0
         for candidate in [UInt16(64), 32, 16] {
-          let bytes = 2 * Int(candidate) * head * elemSize * 2
+          // K is staged transposed with a two-element row pad; V is
+          // row-major. Both are double-buffered.
+          let kStride = Int(candidate) + 2
+          let bytes = 2 * (head * kStride + Int(candidate) * head) * elemSize
           if bytes + 1024 <= maxTG {
             fastTraversal = candidate
             break
